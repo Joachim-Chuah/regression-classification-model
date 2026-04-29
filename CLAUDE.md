@@ -91,6 +91,21 @@ Add libraries only when justified. No deep-learning frameworks for now — the p
 
 A model that looks accurate but is poorly calibrated is worse than useless for downstream confidence scoring.
 
+## Testing
+
+Every non-trivial function in `src/` must have a corresponding test. Tests live in `tests/` and mirror the module they cover (`src/features.py` → `tests/test_features.py`).
+
+**What to test:**
+- `test_features.py` — lookahead bias (corrupt future rows, verify past features unchanged), index preservation, no in-place mutation, expected columns present, RSI bounds.
+- `test_labels.py` — last N rows are NaN, labels are binary, label direction is correct for known inputs, index preserved, valid label count.
+- `test_splits.py` — no overlap between train/val/test, exhaustive row coverage, walk-forward has no future leakage, walk-forward window expands, works on both DataFrame and Series.
+
+**Rules:**
+- Use `pytest` fixtures for reusable sample data. Seed with `np.random.seed(42)`.
+- Never use real yfinance calls in tests — construct synthetic DataFrames directly.
+- A test that passes but doesn't actually catch bugs is worse than no test. The lookahead bias test in `test_features.py` is the most important test in this repo — keep it sharp.
+- Run tests before every commit: `.venv/bin/python -m pytest tests/ -v`
+
 ## Conventions
 
 - All feature functions take a DataFrame indexed by date and return a Series or DataFrame with the same index. No in-place mutation.
