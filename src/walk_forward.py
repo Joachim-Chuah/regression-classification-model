@@ -252,8 +252,11 @@ def walk_forward_cv(
 
 
 if __name__ == "__main__":
-    results = walk_forward_cv(
-        export_csv_path="artifacts/metrics/walk_forward_summary.csv",
-    )
+    import argparse as _ap
+    _p = _ap.ArgumentParser()
+    _p.add_argument("--output", default="artifacts/metrics/experiments/walk_forward_summary.csv",
+                    help="Path to write the CSV results.")
+    _args = _p.parse_args()
+    results = walk_forward_cv(export_csv_path=_args.output)
     print("\nFull results:")
     print(results.to_string(index=False))
