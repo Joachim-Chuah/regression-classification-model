@@ -95,6 +95,14 @@ def compute_features(
     # 200-day MA signal — is this stock above its long-term trend?
     features["vs_200ma"] = close / close.rolling(200).mean() - 1
 
+    # 52-week (252-day) high/low proximity
+    # pct_from_52w_high is always ≤ 0 (0 = stock is at its annual high)
+    # pct_from_52w_low  is always ≥ 0 (0 = stock is at its annual low)
+    high_252 = close.rolling(252).max()
+    low_252  = close.rolling(252).min()
+    features["pct_from_52w_high"] = close / high_252 - 1
+    features["pct_from_52w_low"]  = close / low_252  - 1
+
     if macro is not None:
         m = macro.reindex(df.index).ffill()
 

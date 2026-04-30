@@ -5,11 +5,9 @@ import pytest
 from src.features import compute_features
 
 
-@pytest.fixture
-def sample_ohlcv():
-    np.random.seed(42)
-    n = 100
-    dates = pd.date_range("2020-01-01", periods=n, freq="B")
+def _make_ohlcv(n: int, seed: int = 42) -> pd.DataFrame:
+    np.random.seed(seed)
+    dates = pd.date_range("2019-01-01", periods=n, freq="B")
     close = 100 + np.cumsum(np.random.randn(n))
     return pd.DataFrame(
         {
@@ -21,6 +19,17 @@ def sample_ohlcv():
         },
         index=dates,
     )
+
+
+@pytest.fixture
+def sample_ohlcv():
+    return _make_ohlcv(100)
+
+
+@pytest.fixture
+def long_ohlcv():
+    """300-day OHLCV — enough for the 252-day rolling window features."""
+    return _make_ohlcv(300)
 
 
 def test_no_lookahead_bias(sample_ohlcv):
@@ -61,6 +70,8 @@ def test_expected_columns_present(sample_ohlcv):
         "bb_position",
         "atr_pct",
         "vs_200ma",
+        "pct_from_52w_high",
+        "pct_from_52w_low",
     ]
     for col in expected:
         assert col in features.columns, f"Missing feature: {col}"
@@ -69,3 +80,15 @@ def test_expected_columns_present(sample_ohlcv):
 def test_rsi_bounds(sample_ohlcv):
     rsi = compute_features(sample_ohlcv)["rsi_14"].dropna()
     assert (rsi >= 0).all() and (rsi <= 100).all()
+
+
+def test_pct_from_52w_high_nonpositive(long_ohlcv):
+    valid = compute_features(long_ohlcv)["pct_from_52w_high"].dropna()
+    assert len(valid) > 0
+    assert (valid <= 1e-10).all()  # allow for floating point at exact high
+
+
+def test_pct_from_52w_low_nonnegative(long_ohlcv):
+    valid = compute_features(long_ohlcv)["pct_from_52w_low"].dropna()
+    assert len(valid) > 0
+    assert (valid >= -1e-10).all()  # allow for floating point at exact low
