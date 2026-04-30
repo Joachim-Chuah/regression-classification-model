@@ -6,7 +6,9 @@ import joblib
 ARTIFACTS_DIR = Path(__file__).parent.parent / "artifacts"
 
 
-def save_artifact(model, feature_names: list, version: str, ticker: str) -> Path:
+def save_artifact(
+    model, feature_names: list, version: str, ticker: str, model_name: str = "model"
+) -> Path:
     """Save model + metadata as a single joblib artifact."""
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     artifact = {
@@ -14,9 +16,10 @@ def save_artifact(model, feature_names: list, version: str, ticker: str) -> Path
         "feature_names": feature_names,
         "version": version,
         "ticker": ticker,
+        "model_name": model_name,
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
-    path = ARTIFACTS_DIR / f"v{version}_{ticker}_logreg.pkl"
+    path = ARTIFACTS_DIR / f"v{version}_{ticker}_{model_name}.pkl"
     joblib.dump(artifact, path)
     print(f"Saved: {path}")
     return path

@@ -1,54 +1,189 @@
+import numpy as np
 import pandas as pd
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression as SigmoidCalibrator
+from sklearn.model_selection import TimeSeriesSplit
+from xgboost import XGBClassifier, XGBRegressor
 
-from src.constants import DEFAULT_HORIZON, RANDOM_STATE, TRAIN_END, VAL_END
-from src.data import pull
-from src.evaluate import evaluate
+from src.constants import (
+    DEFAULT_HORIZON, DEFAULT_TICKERS, NEUTRAL_THRESHOLD,
+    RANDOM_STATE, TICKER_SECTOR_ETF, TRAIN_END, VAL_END,
+)
+from src.data import pull, pull_macro
+from src.evaluate import evaluate, evaluate_3class, evaluate_regressor, threshold_analysis
 from src.features import compute_features
-from src.labels import make_labels
+from src.labels import make_3class_labels, make_labels, make_returns
 from src.serialize import save_artifact
 from src.splits import time_split
 
 
-def build_dataset(
-    ticker: str, start: str, end: str, horizon: int = DEFAULT_HORIZON
+# ---------------------------------------------------------------------------
+# 3-class calibration wrapper
+# Re-exported here so existing pickled artifacts (which reference
+# src.train.CalibratedXGB3Class) still deserialise without error.
+# ---------------------------------------------------------------------------
+
+from src.models import CalibratedXGB3Class  # noqa: F401, E402
+
+
+# ---------------------------------------------------------------------------
+# Shared dataset builder
+# ---------------------------------------------------------------------------
+
+def _build(
+    tickers: list[str],
+    start: str,
+    end: str,
+    target: str,   # "label" | "3class" | "return"
+    horizon: int = DEFAULT_HORIZON,
 ) -> tuple[pd.DataFrame, pd.Series]:
-    df = pull(ticker, start=start, end=end)
-    X = compute_features(df)
-    y = make_labels(df["close"], horizon=horizon)
-    combined = X.join(y.rename("label")).dropna()
-    return combined.drop(columns=["label"]), combined["label"]
+    macro = pull_macro(start, end)
+    frames = []
+    for ticker in tickers:
+        df = pull(ticker, start=start, end=end)
+        sector_etf = TICKER_SECTOR_ETF.get(ticker)
+        X = compute_features(df, macro=macro, sector_etf=sector_etf)
+        if target == "3class":
+            y = make_3class_labels(df["close"], horizon, NEUTRAL_THRESHOLD)
+        elif target == "label":
+            y = make_labels(df["close"], horizon)
+        else:
+            y = make_returns(df["close"], horizon)
+        combined = X.join(y.rename(target)).dropna()
+        frames.append(combined)
+        print(f"  {ticker}: {len(combined)} rows")
+    all_data = pd.concat(frames).sort_index()
+    return all_data.drop(columns=[target]), all_data[target]
 
 
-def train(ticker: str = "AAPL", version: str = "0.1.0") -> object:
-    X, y = build_dataset(ticker, start="2015-01-01", end="2024-12-31")
+# ---------------------------------------------------------------------------
+# 3-class classifier (preferred)
+# ---------------------------------------------------------------------------
+
+def train_classifier_3class(
+    tickers: list[str] = DEFAULT_TICKERS,
+    version: str = "1.1.0",
+    horizon: int = DEFAULT_HORIZON,
+) -> CalibratedXGB3Class:
+    """
+    Train a 3-class XGBoost classifier with isotonic probability calibration.
+
+    Classes: 0=down, 1=neutral, 2=up  (neutral = return within ±NEUTRAL_THRESHOLD)
+    predict_proba(X) returns shape (N, 3): [P(down), P(neutral), P(up)]
+    For Rylo: use proba[:,2] as P(up) and proba[:,0] as P(down).
+
+    Calibration is fit on the held-out val set so it is never exposed to
+    training data. This makes the probability magnitudes meaningful.
+    """
+    print("=== 3-Class Classifier — Loading data ===")
+    X, y = _build(tickers, "2015-01-01", "2024-12-31", target="3class", horizon=horizon)
+    print(f"  Total: {len(X)} rows across {len(tickers)} tickers")
+    print(f"  Threshold: ±{NEUTRAL_THRESHOLD:.0%}  |  "
+          f"down:{(y==0).mean():.1%}  neutral:{(y==1).mean():.1%}  up:{(y==2).mean():.1%}\n")
 
     X_train, X_val, X_test = time_split(X, TRAIN_END, VAL_END)
     y_train, y_val, y_test = time_split(y, TRAIN_END, VAL_END)
+    print(f"  Train: {len(X_train)} rows  |  Val: {len(X_val)} rows  |  Test: {len(X_test)} rows\n")
 
-    # Fit the base pipeline on train
-    base = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", LogisticRegression(max_iter=1000, random_state=RANDOM_STATE)),
-    ])
-    base.fit(X_train, y_train)
+    model = XGBClassifier(
+        n_estimators=200,
+        max_depth=4,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        min_child_weight=5,
+        reg_alpha=0.1,
+        objective="multi:softprob",
+        num_class=3,
+        random_state=RANDOM_STATE,
+        eval_metric="mlogloss",
+        verbosity=0,
+    )
+    model.fit(X_train, y_train)
 
-    print("=== Validation (uncalibrated) ===")
-    evaluate(base, X_val, y_val)
+    print("=== 3-Class Classifier — Feature Importance ===")
+    importances = pd.Series(model.feature_importances_, index=X_train.columns)
+    print(importances.sort_values(ascending=False).to_string())
+    print()
 
-    # Calibrate on val using prefit — keeps train/val/test boundaries clean
-    calibrated = CalibratedClassifierCV(base, cv="prefit", method="isotonic")
-    calibrated.fit(X_val, y_val)
+    # --- Isotonic calibration on val set ---
+    print("=== 3-Class Classifier — Calibrating on val set ===")
+    raw_val_proba = model.predict_proba(X_val)
+    calibrators = []
+    for k in range(3):
+        iso = IsotonicRegression(out_of_bounds="clip")
+        iso.fit(raw_val_proba[:, k], (y_val == k).astype(float))
+        calibrators.append(iso)
+    calibrated = CalibratedXGB3Class(model, calibrators)
+    print("  Done.\n")
 
-    print("=== Test (calibrated) ===")
-    evaluate(calibrated, X_test, y_test)
+    print("=== 3-Class Classifier — Test ===")
+    evaluate_3class(calibrated, X_test, y_test)
+    threshold_analysis(calibrated, X_test, y_test)
 
-    save_artifact(calibrated, list(X_train.columns), version=version, ticker=ticker)
+    save_artifact(
+        calibrated, list(X_train.columns),
+        version=version, ticker="multi", model_name="xgb_clf3",
+    )
     return calibrated
 
 
+# ---------------------------------------------------------------------------
+# Regressor
+# ---------------------------------------------------------------------------
+
+def train_regressor(
+    tickers: list[str] = DEFAULT_TICKERS,
+    version: str = "0.3.0",
+    horizon: int = DEFAULT_HORIZON,
+) -> XGBRegressor:
+    print("\n=== Regressor — Loading data ===")
+    X, y = _build(tickers, "2015-01-01", "2024-12-31", target="return", horizon=horizon)
+    print(f"  Total: {len(X)} rows across {len(tickers)} tickers\n")
+
+    X_train, _, X_test = time_split(X, TRAIN_END, VAL_END)
+    y_train, _, y_test = time_split(y, TRAIN_END, VAL_END)
+
+    model = XGBRegressor(
+        n_estimators=200,
+        max_depth=4,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        min_child_weight=5,
+        reg_alpha=0.1,
+        random_state=RANDOM_STATE,
+        verbosity=0,
+    )
+    model.fit(X_train, y_train)
+
+    print("=== Regressor — Feature Importance ===")
+    importances = pd.Series(model.feature_importances_, index=X_train.columns)
+    print(importances.sort_values(ascending=False).to_string())
+    print()
+
+    print("=== Regressor — Test ===")
+    evaluate_regressor(model, X_test, y_test)
+
+    save_artifact(
+        model, list(X_train.columns),
+        version=version, ticker="multi", model_name="xgb_reg",
+    )
+    return model
+
+
+# ---------------------------------------------------------------------------
+# Train both
+# ---------------------------------------------------------------------------
+
+def train_both(
+    tickers: list[str] = DEFAULT_TICKERS,
+    horizon: int = DEFAULT_HORIZON,
+) -> tuple[XGBClassifier, XGBRegressor]:
+    clf = train_classifier_3class(tickers=tickers, horizon=horizon)
+    reg = train_regressor(tickers=tickers, horizon=horizon)
+    return clf, reg
+
+
 if __name__ == "__main__":
-    train()
+    train_both()

@@ -56,6 +56,11 @@ def test_expected_columns_present(sample_ohlcv):
         "rsi_14",
         "rolling_vol_21d",
         "volume_zscore_21d",
+        "macd_line",
+        "macd_hist",
+        "bb_position",
+        "atr_pct",
+        "vs_200ma",
     ]
     for col in expected:
         assert col in features.columns, f"Missing feature: {col}"

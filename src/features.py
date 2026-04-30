@@ -13,20 +13,53 @@ def _rsi(close: pd.Series, window: int = 14) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
-def compute_features(df: pd.DataFrame) -> pd.DataFrame:
+def _macd(
+    close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
+) -> tuple[pd.Series, pd.Series]:
+    fast_ema = close.ewm(span=fast, adjust=False).mean()
+    slow_ema = close.ewm(span=slow, adjust=False).mean()
+    macd_line = (fast_ema - slow_ema) / close  # normalised by price
+    macd_hist = macd_line - macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line, macd_hist
+
+
+def _bollinger_position(close: pd.Series, window: int = 20) -> pd.Series:
+    mid = close.rolling(window).mean()
+    std = close.rolling(window).std()
+    band_width = (2 * std * 2).replace(0, np.nan)  # upper - lower = 4 * std
+    return (close - (mid - 2 * std)) / band_width  # 0 = at lower band, 1 = at upper
+
+
+def _atr_pct(df: pd.DataFrame, window: int = 14) -> pd.Series:
+    high, low, close = df["high"], df["low"], df["close"]
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1
+    ).max(axis=1)
+    atr = tr.ewm(com=window - 1, min_periods=window).mean()
+    return atr / close  # express as fraction of price so it's scale-independent
+
+
+def compute_features(
+    df: pd.DataFrame,
+    macro: pd.DataFrame | None = None,
+    sector_etf: str | None = None,
+) -> pd.DataFrame:
     """
-    Compute features from OHLCV DataFrame.
+    Compute features from OHLCV DataFrame, optionally joined with macro series.
 
     All features at time t use only data available at or before t.
     No in-place mutation of the input.
 
     Parameters
     ----------
-    df : DataFrame with [open, high, low, close, volume] columns, date index.
+    df         : DataFrame with [open, high, low, close, volume] columns, date index.
+    macro      : Optional DataFrame from data.pull_macro() with market-wide features.
+    sector_etf : Optional sector ETF ticker (e.g. "XLK") for sector-relative strength.
 
     Returns
     -------
-    DataFrame of features with the same index.
+    DataFrame of features with the same index as df.
     """
     close = df["close"]
     volume = df["volume"]
@@ -35,7 +68,7 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     features = pd.DataFrame(index=df.index)
 
     # Momentum: N-day price return ending at t
-    features["momentum_5d"] = close.pct_change(5)
+    features["momentum_5d"]  = close.pct_change(5)
     features["momentum_10d"] = close.pct_change(10)
     features["momentum_21d"] = close.pct_change(21)
 
@@ -47,7 +80,39 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # Volume z-score relative to trailing 21-day window
     vol_mean = volume.rolling(21).mean()
-    vol_std = volume.rolling(21).std().replace(0, np.nan)
+    vol_std  = volume.rolling(21).std().replace(0, np.nan)
     features["volume_zscore_21d"] = (volume - vol_mean) / vol_std
+
+    # MACD line and histogram (both normalised by close price)
+    features["macd_line"], features["macd_hist"] = _macd(close)
+
+    # Bollinger Band position: 0 = at lower band, 1 = at upper band
+    features["bb_position"] = _bollinger_position(close)
+
+    # ATR as a fraction of close price — measures current volatility regime
+    features["atr_pct"] = _atr_pct(df)
+
+    # 200-day MA signal — is this stock above its long-term trend?
+    features["vs_200ma"] = close / close.rolling(200).mean() - 1
+
+    if macro is not None:
+        m = macro.reindex(df.index).ffill()
+
+        features["vix_zscore_252d"]       = m["vix_zscore_252d"]
+        features["vix_change_5d"]         = m["vix_change_5d"]
+        features["spy_return_20d"]        = m["spy_return_20d"]
+        features["spy_vs_200ma"]          = m["spy_vs_200ma"]
+        features["yield_10y_zscore_252d"] = m["yield_10y_zscore_252d"]
+        features["yield_change_20d"]          = m["yield_change_20d"]
+        features["yield_curve_zscore_252d"]   = m["yield_curve_zscore_252d"]
+
+        # Broad market relative strength
+        features["rel_strength_20d"] = close.pct_change(20) - m["spy_return_20d"]
+
+        # Sector-relative strength (more specific than vs SPY)
+        if sector_etf and f"{sector_etf}_return_20d" in m.columns:
+            features["rel_strength_vs_sector"] = (
+                close.pct_change(20) - m[f"{sector_etf}_return_20d"]
+            )
 
     return features
