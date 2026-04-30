@@ -15,6 +15,84 @@ from sklearn.metrics import (
 )
 
 
+def signal_quality_table(
+    y: pd.Series,
+    p_up: np.ndarray,
+    forward_return: pd.Series | np.ndarray,
+    thresholds: list[float] | None = None,
+) -> pd.DataFrame:
+    """
+    Compute threshold-based precision/coverage/return metrics for "up" calls.
+
+    Parameters
+    ----------
+    y              : 3-class labels (0=down, 1=neutral, 2=up)
+    p_up           : predicted P(up)
+    forward_return : realized forward return aligned to y/p_up
+    thresholds     : confidence cutoffs to evaluate
+    """
+    if thresholds is None:
+        thresholds = [0.50, 0.55, 0.60, 0.65, 0.70]
+
+    y_arr = np.asarray(y)
+    p_up_arr = np.asarray(p_up)
+    ret_arr = np.asarray(forward_return)
+    actual_up = y_arr == 2
+    base_rate = float(actual_up.mean())
+
+    rows = []
+    for t in thresholds:
+        mask = p_up_arr >= t
+        n_calls = int(mask.sum())
+        precision = float(actual_up[mask].mean()) if n_calls > 0 else float("nan")
+        coverage = float(mask.mean())
+        mean_return = float(ret_arr[mask].mean()) if n_calls > 0 else float("nan")
+        rows.append(
+            {
+                "threshold": float(t),
+                "n_calls": n_calls,
+                "coverage": coverage,
+                "precision_up": precision,
+                "mean_forward_return": mean_return,
+                "lift_vs_base": (precision / base_rate - 1) if n_calls > 0 else float("nan"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def topk_precision_table(
+    y: pd.Series,
+    p_up: np.ndarray,
+    forward_return: pd.Series | np.ndarray,
+    topk_fracs: list[float] | None = None,
+) -> pd.DataFrame:
+    """Evaluate precision/return on the highest-confidence P(up) slice."""
+    if topk_fracs is None:
+        topk_fracs = [0.10, 0.20]
+
+    y_arr = np.asarray(y)
+    p_up_arr = np.asarray(p_up)
+    ret_arr = np.asarray(forward_return)
+    actual_up = y_arr == 2
+    n = len(p_up_arr)
+    order = np.argsort(-p_up_arr)
+
+    rows = []
+    for frac in topk_fracs:
+        k = max(1, int(np.floor(n * frac)))
+        idx = order[:k]
+        rows.append(
+            {
+                "topk_frac": float(frac),
+                "n_calls": int(k),
+                "precision_up": float(actual_up[idx].mean()),
+                "mean_forward_return": float(ret_arr[idx].mean()),
+                "min_p_up": float(p_up_arr[idx].min()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def evaluate(model, X: pd.DataFrame, y: pd.Series, plot: bool = False) -> dict:
     """
     Print accuracy, precision, recall, Brier score, and Brier skill score.
@@ -108,26 +186,21 @@ def threshold_analysis(model, X: pd.DataFrame, y: pd.Series) -> pd.DataFrame:
     p_up = model.predict_proba(X)[:, 2]
     actual_up = (y == 2).values
     base_rate = float(actual_up.mean())
-
-    thresholds = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
-    rows = []
-    for t in thresholds:
-        mask = p_up >= t
-        n = int(mask.sum())
-        precision = float(actual_up[mask].mean()) if n > 0 else float("nan")
-        coverage = float(mask.mean())
-        lift = precision / base_rate - 1 if n > 0 else float("nan")
-        rows.append({"threshold": t, "precision": precision, "coverage": coverage,
-                     "n_calls": n, "lift": lift})
-
-    df = pd.DataFrame(rows)
+    df = signal_quality_table(
+        y=y,
+        p_up=p_up,
+        # For this generic helper, use binary reward proxy (1 if up else 0).
+        # Walk-forward reports realized returns via forward-return labels.
+        forward_return=actual_up.astype(float),
+        thresholds=[0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90],
+    )
 
     print(f"\n=== Confidence Threshold Analysis (base rate: {base_rate:.1%}) ===")
     print(f"  {'Threshold':>9}  {'Precision':>9}  {'Coverage':>9}  {'N calls':>8}  {'Lift':>7}")
     print("  " + "-" * 53)
     for _, row in df.iterrows():
-        prec_str = f"{row['precision']:.1%}" if not np.isnan(row["precision"]) else "  n/a"
-        lift_str = f"{row['lift']:+.1%}" if not np.isnan(row["lift"]) else "  n/a"
+        prec_str = f"{row['precision_up']:.1%}" if not np.isnan(row["precision_up"]) else "  n/a"
+        lift_str = f"{row['lift_vs_base']:+.1%}" if not np.isnan(row["lift_vs_base"]) else "  n/a"
         print(f"    {row['threshold']:.2f}       {prec_str}      {row['coverage']:.1%}"
               f"     {row['n_calls']:>6,}    {lift_str}")
 

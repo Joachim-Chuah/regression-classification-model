@@ -13,6 +13,7 @@ pattern that will fail in production.
 
 import numpy as np
 import pandas as pd
+from pathlib import Path
 from sklearn.metrics import accuracy_score, brier_score_loss, precision_score, recall_score
 from xgboost import XGBClassifier
 
@@ -22,7 +23,8 @@ from src.constants import (
 )
 from src.data import pull, pull_macro
 from src.features import compute_features
-from src.labels import make_3class_labels
+from src.labels import make_3class_labels, make_returns
+from src.evaluate import signal_quality_table, topk_precision_table
 
 _REGIME_LABELS = {
     2020: "COVID crash",
@@ -52,6 +54,7 @@ def walk_forward_cv(
     tickers: list[str] = DEFAULT_TICKERS,
     horizon: int = DEFAULT_HORIZON,
     test_years: list[int] | None = None,
+    export_csv_path: str | None = None,
 ) -> pd.DataFrame:
     """
     Expanding-window walk-forward evaluation of the 3-class classifier.
@@ -59,6 +62,8 @@ def walk_forward_cv(
     Builds the full dataset once (parquet cache makes this fast after the
     first run), then for each test year trains on all prior data and
     evaluates on that year alone. Returns a summary DataFrame.
+
+    If export_csv_path is provided, writes the summary DataFrame to CSV.
     """
     if test_years is None:
         test_years = [2020, 2021, 2022, 2023, 2024]
@@ -75,11 +80,13 @@ def walk_forward_cv(
         sector_etf = TICKER_SECTOR_ETF.get(ticker)
         X_ticker = compute_features(df, macro=macro, sector_etf=sector_etf)
         y_ticker = make_3class_labels(df["close"], horizon, NEUTRAL_THRESHOLD)
-        combined = X_ticker.join(y_ticker.rename("label")).dropna()
+        r_ticker = make_returns(df["close"], horizon).rename("forward_return")
+        combined = X_ticker.join(y_ticker.rename("label")).join(r_ticker).dropna()
         frames.append(combined)
     all_data = pd.concat(frames).sort_index()
-    X_all = all_data.drop(columns=["label"])
+    X_all = all_data.drop(columns=["label", "forward_return"])
     y_all = all_data["label"]
+    ret_all = all_data["forward_return"]
     print(f"  Total rows available: {len(X_all):,}\n")
 
     results = []
@@ -92,6 +99,7 @@ def walk_forward_cv(
         y_train = y_all[y_all.index <= train_end]
         X_test  = X_all[(X_all.index >= test_start) & (X_all.index <= test_end)]
         y_test  = y_all[(y_all.index >= test_start) & (y_all.index <= test_end)]
+        r_test  = ret_all[(ret_all.index >= test_start) & (ret_all.index <= test_end)]
 
         if len(X_train) < 2000 or len(X_test) < 200:
             print(f"  {test_year}: insufficient data, skipping")
@@ -112,13 +120,32 @@ def walk_forward_cv(
         up_prec = precision_score(y_test == 2, y_pred == 2, zero_division=0)
         up_rec  = recall_score(y_test == 2, y_pred == 2, zero_division=0)
         acc     = accuracy_score(y_test, y_pred)
+        thresh_tbl = signal_quality_table(
+            y=y_test,
+            p_up=p_up,
+            forward_return=r_test,
+            thresholds=[0.60, 0.70],
+        )
+        topk_tbl = topk_precision_table(
+            y=y_test,
+            p_up=p_up,
+            forward_return=r_test,
+            topk_fracs=[0.10, 0.20],
+        )
+
+        p60 = thresh_tbl[thresh_tbl["threshold"] == 0.60].iloc[0]
+        p70 = thresh_tbl[thresh_tbl["threshold"] == 0.70].iloc[0]
+        t10 = topk_tbl[topk_tbl["topk_frac"] == 0.10].iloc[0]
+        t20 = topk_tbl[topk_tbl["topk_frac"] == 0.20].iloc[0]
 
         regime = _REGIME_LABELS.get(test_year, "")
         print(
             f"  {test_year} ({regime:15s}):  "
             f"acc={acc:.1%}  up_prec={up_prec:.1%}  up_rec={up_rec:.1%}  "
             f"brier={brier_skill:+.4f}  "
-            f"actual_up={y_up_bin.mean():.1%}  pred_up={(y_pred == 2).mean():.1%}"
+            f"actual_up={y_up_bin.mean():.1%}  pred_up={(y_pred == 2).mean():.1%}  "
+            f"P60_prec={p60['precision_up']:.1%}  P70_prec={p70['precision_up']:.1%}  "
+            f"Top10_prec={t10['precision_up']:.1%}"
         )
 
         results.append({
@@ -132,22 +159,43 @@ def walk_forward_cv(
             "brier_skill": brier_skill,
             "actual_up":   float(y_up_bin.mean()),
             "pred_up":     float((y_pred == 2).mean()),
+            "p60_precision": float(p60["precision_up"]),
+            "p60_coverage": float(p60["coverage"]),
+            "p60_mean_return": float(p60["mean_forward_return"]),
+            "p70_precision": float(p70["precision_up"]),
+            "p70_coverage": float(p70["coverage"]),
+            "p70_mean_return": float(p70["mean_forward_return"]),
+            "top10_precision": float(t10["precision_up"]),
+            "top10_mean_return": float(t10["mean_forward_return"]),
+            "top20_precision": float(t20["precision_up"]),
+            "top20_mean_return": float(t20["mean_forward_return"]),
         })
 
     summary = pd.DataFrame(results)
 
     print(f"\n  {'Metric':<20} {'Mean':>8}  {'Std':>8}  {'Min':>8}  {'Max':>8}")
     print("  " + "-" * 58)
-    for col in ["accuracy", "up_precision", "up_recall", "brier_skill"]:
+    for col in [
+        "accuracy", "up_precision", "up_recall", "brier_skill",
+        "p60_precision", "p70_precision", "top10_precision",
+    ]:
         print(
             f"  {col:<20} {summary[col].mean():>8.3f}  {summary[col].std():>8.3f}"
             f"  {summary[col].min():>8.3f}  {summary[col].max():>8.3f}"
         )
 
+    if export_csv_path:
+        out_path = Path(export_csv_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        summary.to_csv(out_path, index=False)
+        print(f"\n  Saved walk-forward summary to: {out_path.resolve()}")
+
     return summary
 
 
 if __name__ == "__main__":
-    results = walk_forward_cv()
+    results = walk_forward_cv(
+        export_csv_path="artifacts/metrics/walk_forward_summary.csv",
+    )
     print("\nFull results:")
     print(results.to_string(index=False))

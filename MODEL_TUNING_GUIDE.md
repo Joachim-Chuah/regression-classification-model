@@ -5,6 +5,56 @@ what we tried, why, in what order, and what each step taught us.
 
 ---
 
+## How to Run (Current Workflow)
+
+Run these from the `regression-classification-model` directory.
+
+### 1) Train both models and save artifacts
+
+```bash
+python -m src.train
+```
+
+This trains:
+- 3-class classifier (`xgb_clf3`, isotonic-calibrated)
+- regressor (`xgb_reg`)
+
+Artifacts are saved under `artifacts/`.
+
+### 2) Run walk-forward evaluation and export metrics CSV
+
+```bash
+python -m src.walk_forward
+```
+
+This prints per-year fold metrics and writes:
+- `artifacts/metrics/walk_forward_summary.csv`
+
+### 3) Run the daily scanner
+
+```bash
+# default watchlist, LEAPS mode
+python predict.py
+
+# swing mode
+python predict.py --mode swing
+
+# custom tickers
+python predict.py AAPL NVDA MSFT
+```
+
+### 4) Run tests
+
+```bash
+# full suite (includes integration tests that may hit live network data)
+pytest tests/ -v
+
+# stable local quick check (no integration tests)
+pytest tests/ -m "not integration" -v
+```
+
+---
+
 ## The Big Picture First
 
 The goal is to predict whether a stock will be up or down over the next 20
@@ -521,4 +571,53 @@ This is intentional — silent feature drift would be far worse than a loud erro
 
 ---
 
-*Document generated: 2026-04-29*
+## Current Status (2026-04-29)
+
+This section reflects the repository as it stands right now.
+
+### What is in production code today
+
+- **Training stack:** 3-class XGBoost classifier + XGBoost regressor (`src/train.py`).
+- **Classifier calibration:** Isotonic calibration is applied on the held-out validation set before artifact save.
+- **Inference path:** `predict.py` is the active signal scanner and consumes
+  `*_xgb_clf3.pkl` + `*_xgb_reg.pkl` artifacts.
+- **UI status:** the old Streamlit dashboard (`app.py`) has been removed from the repo.
+
+### Evaluation status now
+
+In addition to accuracy/precision/recall/Brier metrics, walk-forward now tracks
+trading-oriented quality metrics:
+
+- **Threshold quality:** precision, coverage, call count, and mean realized
+  forward return at `P(up) >= 0.60` and `P(up) >= 0.70`.
+- **Top-k quality:** precision and mean realized forward return for top 10% and
+  top 20% highest-confidence `P(up)` rows.
+
+These are implemented via `signal_quality_table()` and `topk_precision_table()`
+in `src/evaluate.py` and are consumed directly by `src/walk_forward.py`.
+
+### Walk-forward output persistence
+
+Walk-forward runs can now persist fold metrics to CSV for experiment tracking.
+
+- API: `walk_forward_cv(..., export_csv_path="...")`
+- Default script output: `artifacts/metrics/walk_forward_summary.csv` when
+  running `python -m src.walk_forward`
+
+This enables side-by-side comparison of model variants without manually copying
+terminal output.
+
+### Practical tuning focus from here
+
+Given the current architecture, the highest-leverage next steps are:
+
+1. **Improve signal selection quality** (threshold/top-k precision and return),
+   not just headline accuracy.
+2. **Refine label design** (e.g., volatility-scaled neutral band) and compare
+   with the current fixed ±2% neutral threshold under walk-forward.
+3. **Promote by stability gates**: improve mean metrics while avoiding large
+   worst-year regressions (especially 2022-like regimes).
+
+---
+
+*Document updated: 2026-04-29*
