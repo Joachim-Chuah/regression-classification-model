@@ -95,3 +95,39 @@ def pull_macro(start: str, end: str) -> pd.DataFrame:
         "XLK_return_20d", "XLF_return_20d", "XLV_return_20d", "XLE_return_20d",
     ]
     return macro[keep]
+
+
+def pull_earnings_dates(ticker: str) -> pd.DatetimeIndex:
+    """Return historical + upcoming earnings dates for a ticker.
+
+    Cached to data/raw/earnings_{ticker}.parquet. Re-fetches when the cache
+    has no future dates remaining (i.e. the last known earnings has passed).
+    Returns an empty DatetimeIndex if yfinance has no data for the ticker.
+
+    No leakage risk: earnings dates are announced publicly 2-4 weeks in
+    advance, so knowing the next earnings date at time t is realistic.
+    """
+    safe = ticker.replace("^", "").replace("=", "").replace("-", "_")
+    cache_path = RAW_DIR / f"earnings_{safe}.parquet"
+    today = pd.Timestamp.today().normalize()
+
+    if cache_path.exists():
+        cached = pd.read_parquet(cache_path)
+        dates = pd.DatetimeIndex(cached["date"])
+        if len(dates) > 0 and dates.max() >= today:
+            return dates.sort_values()
+
+    try:
+        t = yf.Ticker(ticker)
+        ed = t.earnings_dates
+        if ed is None or ed.empty:
+            return pd.DatetimeIndex([])
+        dates = pd.DatetimeIndex(ed.index)
+        if dates.tz is not None:
+            dates = dates.tz_localize(None)
+        dates = dates.normalize().sort_values()
+        RAW_DIR.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({"date": dates}).to_parquet(cache_path, index=False)
+        return dates
+    except Exception:
+        return pd.DatetimeIndex([])

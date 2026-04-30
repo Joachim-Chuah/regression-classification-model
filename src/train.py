@@ -9,7 +9,7 @@ from src.constants import (
     DEFAULT_HORIZON, DEFAULT_TICKERS, NEUTRAL_THRESHOLD,
     RANDOM_STATE, TICKER_SECTOR_ETF, TRAIN_END, VAL_END,
 )
-from src.data import pull, pull_macro
+from src.data import pull, pull_earnings_dates, pull_macro
 from src.evaluate import evaluate, evaluate_3class, evaluate_regressor, threshold_analysis
 from src.features import compute_features
 from src.labels import (
@@ -53,7 +53,8 @@ def _build(
     for ticker in tickers:
         df = pull(ticker, start=start, end=end)
         sector_etf = TICKER_SECTOR_ETF.get(ticker)
-        X = compute_features(df, macro=macro, sector_etf=sector_etf)
+        ed = pull_earnings_dates(ticker)
+        X = compute_features(df, macro=macro, sector_etf=sector_etf, earnings_dates=ed)
         r = make_returns(df["close"], horizon)
         if target == "3class":
             if label_mode == "vol_scaled":

@@ -39,7 +39,7 @@ import pandas as pd
 # Required so joblib can deserialise CalibratedXGB3Class stored in the artifact
 from src.models import CalibratedXGB3Class  # noqa: F401
 from src.constants import DEFAULT_TICKERS, TICKER_SECTOR_ETF
-from src.data import pull, pull_macro
+from src.data import pull, pull_earnings_dates, pull_macro
 from src.features import compute_features
 
 # ---------------------------------------------------------------------------
@@ -169,7 +169,8 @@ def run(tickers: list[str], mode: str = "leaps") -> pd.DataFrame:
                 continue
 
             sector_etf = SECTOR_MAP.get(ticker)
-            features   = compute_features(df, macro=macro, sector_etf=sector_etf)
+            ed         = pull_earnings_dates(ticker)
+            features   = compute_features(df, macro=macro, sector_etf=sector_etf, earnings_dates=ed)
             latest     = features.iloc[[-1]].copy()
 
             for col in clf_features:

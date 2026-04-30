@@ -44,6 +44,7 @@ def compute_features(
     df: pd.DataFrame,
     macro: pd.DataFrame | None = None,
     sector_etf: str | None = None,
+    earnings_dates: pd.DatetimeIndex | None = None,
 ) -> pd.DataFrame:
     """
     Compute features from OHLCV DataFrame, optionally joined with macro series.
@@ -95,14 +96,6 @@ def compute_features(
     # 200-day MA signal — is this stock above its long-term trend?
     features["vs_200ma"] = close / close.rolling(200).mean() - 1
 
-    # 52-week (252-day) high/low proximity
-    # pct_from_52w_high is always ≤ 0 (0 = stock is at its annual high)
-    # pct_from_52w_low  is always ≥ 0 (0 = stock is at its annual low)
-    high_252 = close.rolling(252).max()
-    low_252  = close.rolling(252).min()
-    features["pct_from_52w_high"] = close / high_252 - 1
-    features["pct_from_52w_low"]  = close / low_252  - 1
-
     if macro is not None:
         m = macro.reindex(df.index).ffill()
 
@@ -122,5 +115,17 @@ def compute_features(
             features["rel_strength_vs_sector"] = (
                 close.pct_change(20) - m[f"{sector_etf}_return_20d"]
             )
+
+    if earnings_dates is not None and len(earnings_dates) > 0:
+        sorted_ed = np.sort(np.asarray(earnings_dates, dtype="datetime64[D]"))
+        idx_days  = df.index.values.astype("datetime64[D]")
+        # searchsorted side="right" means: first earnings date strictly after idx_day
+        pos = np.searchsorted(sorted_ed, idx_days, side="right")
+        raw_days = np.full(len(idx_days), np.nan)
+        valid = pos < len(sorted_ed)
+        raw_days[valid] = (sorted_ed[pos[valid]] - idx_days[valid]).astype(float)
+        features["days_to_earnings"] = pd.Series(
+            np.clip(raw_days, 0, 90), index=df.index
+        )
 
     return features

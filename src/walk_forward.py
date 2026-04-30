@@ -22,7 +22,7 @@ from src.constants import (
     DEFAULT_HORIZON, DEFAULT_TICKERS, NEUTRAL_THRESHOLD,
     RANDOM_STATE, TICKER_SECTOR_ETF,
 )
-from src.data import pull, pull_macro
+from src.data import pull, pull_earnings_dates, pull_macro
 from src.features import compute_features
 from src.labels import compute_sample_weights, make_3class_labels, make_3class_labels_vol_scaled, make_returns
 from src.evaluate import signal_quality_table, topk_precision_table
@@ -102,7 +102,8 @@ def walk_forward_cv(
     for ticker in tickers:
         df = pull(ticker, start="2015-01-01", end="2024-12-31")
         sector_etf = TICKER_SECTOR_ETF.get(ticker)
-        X_ticker = compute_features(df, macro=macro, sector_etf=sector_etf)
+        ed = pull_earnings_dates(ticker)
+        X_ticker = compute_features(df, macro=macro, sector_etf=sector_etf, earnings_dates=ed)
         if label_mode == "vol_scaled":
             y_ticker = make_3class_labels_vol_scaled(
                 df["close"],

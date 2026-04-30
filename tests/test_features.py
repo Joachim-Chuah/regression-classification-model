@@ -70,8 +70,6 @@ def test_expected_columns_present(sample_ohlcv):
         "bb_position",
         "atr_pct",
         "vs_200ma",
-        "pct_from_52w_high",
-        "pct_from_52w_low",
     ]
     for col in expected:
         assert col in features.columns, f"Missing feature: {col}"
@@ -82,13 +80,34 @@ def test_rsi_bounds(sample_ohlcv):
     assert (rsi >= 0).all() and (rsi <= 100).all()
 
 
-def test_pct_from_52w_high_nonpositive(long_ohlcv):
-    valid = compute_features(long_ohlcv)["pct_from_52w_high"].dropna()
-    assert len(valid) > 0
-    assert (valid <= 1e-10).all()  # allow for floating point at exact high
+def test_days_to_earnings_decreases(long_ohlcv):
+    """days_to_earnings must count down as dates approach earnings."""
+    ed = pd.DatetimeIndex(["2020-06-15", "2020-09-15"])
+    feats = compute_features(long_ohlcv, earnings_dates=ed)
+    dtoe = feats["days_to_earnings"].dropna()
+    assert len(dtoe) > 0
+    # Within any single earnings cycle, values must be non-increasing
+    assert (dtoe.diff().dropna() <= 1).all()  # ≤1 allows for weekends
 
 
-def test_pct_from_52w_low_nonnegative(long_ohlcv):
-    valid = compute_features(long_ohlcv)["pct_from_52w_low"].dropna()
-    assert len(valid) > 0
-    assert (valid >= -1e-10).all()  # allow for floating point at exact low
+def test_days_to_earnings_nan_after_last_earnings(sample_ohlcv):
+    """Rows after the last earnings date should have NaN (no future earnings)."""
+    past_date = pd.Timestamp(sample_ohlcv.index[0]) - pd.Timedelta(days=30)
+    ed = pd.DatetimeIndex([past_date])
+    feats = compute_features(sample_ohlcv, earnings_dates=ed)
+    assert feats["days_to_earnings"].isna().all()
+
+
+def test_days_to_earnings_capped_at_90(sample_ohlcv):
+    """Values must not exceed 90 days."""
+    far_future = pd.Timestamp(sample_ohlcv.index[-1]) + pd.Timedelta(days=200)
+    ed = pd.DatetimeIndex([far_future])
+    feats = compute_features(sample_ohlcv, earnings_dates=ed)
+    valid = feats["days_to_earnings"].dropna()
+    assert (valid <= 90).all()
+
+
+def test_days_to_earnings_absent_when_no_dates(sample_ohlcv):
+    """Feature should not appear when earnings_dates is None."""
+    feats = compute_features(sample_ohlcv)
+    assert "days_to_earnings" not in feats.columns
