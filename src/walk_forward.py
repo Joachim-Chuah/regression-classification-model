@@ -24,7 +24,7 @@ from src.constants import (
 )
 from src.data import pull, pull_macro
 from src.features import compute_features
-from src.labels import make_3class_labels, make_3class_labels_vol_scaled, make_returns
+from src.labels import compute_sample_weights, make_3class_labels, make_3class_labels_vol_scaled, make_returns
 from src.evaluate import signal_quality_table, topk_precision_table
 from src.models import CalibratedXGB3Class
 
@@ -62,6 +62,7 @@ def walk_forward_cv(
     vol_min_threshold: float = 0.005,
     calibrate: bool = True,
     cal_window_years: int = 1,
+    weight_clip: tuple[float, float] | None = None,
 ) -> pd.DataFrame:
     """
     Expanding-window walk-forward evaluation of the 3-class classifier.
@@ -90,7 +91,9 @@ def walk_forward_cv(
     else:
         print(f"  Label mode: fixed (±{NEUTRAL_THRESHOLD:.0%})")
     cal_note = f"calibrated (cal_window={cal_window_years}y)" if calibrate else "raw (no calibration)"
-    print(f"  Calibration: {cal_note}\n")
+    print(f"  Calibration: {cal_note}")
+    w_note = f"clip abs(return) to [{weight_clip[0]:.2%}, {weight_clip[1]:.2%}]" if weight_clip else "none"
+    print(f"  Sample weights: {w_note}\n")
 
     # Build the full 2015-2024 dataset once
     print("  Building full dataset (using parquet cache where available)...")
@@ -147,7 +150,8 @@ def walk_forward_cv(
                 print(f"  {test_year}: insufficient data for calibration split, skipping")
                 continue
             xgb = XGBClassifier(**_XGB_PARAMS)
-            xgb.fit(X_train_xgb, y_train_xgb)
+            w_train = compute_sample_weights(ret_all[ret_all.index <= xgb_train_end].values, weight_clip[0], weight_clip[1]) if weight_clip else None
+            xgb.fit(X_train_xgb, y_train_xgb, sample_weight=w_train)
             raw_cal = xgb.predict_proba(X_cal)
             calibrators = []
             for k in range(3):
@@ -157,7 +161,8 @@ def walk_forward_cv(
             fitted_model = CalibratedXGB3Class(xgb, calibrators)
         else:
             xgb = XGBClassifier(**_XGB_PARAMS)
-            xgb.fit(X_train, y_train)
+            w_train = compute_sample_weights(ret_all[ret_all.index <= train_end].values, weight_clip[0], weight_clip[1]) if weight_clip else None
+            xgb.fit(X_train, y_train, sample_weight=w_train)
             fitted_model = xgb
 
         y_pred  = fitted_model.predict(X_test)

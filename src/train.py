@@ -13,6 +13,7 @@ from src.data import pull, pull_macro
 from src.evaluate import evaluate, evaluate_3class, evaluate_regressor, threshold_analysis
 from src.features import compute_features
 from src.labels import (
+    compute_sample_weights,
     make_3class_labels,
     make_3class_labels_vol_scaled,
     make_labels,
@@ -44,13 +45,16 @@ def _build(
     label_mode: str = "fixed",  # "fixed" | "vol_scaled"
     vol_k: float = 1.0,
     vol_min_threshold: float = 0.005,
-) -> tuple[pd.DataFrame, pd.Series]:
+) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
+    """Returns (X, y, forward_return). forward_return is always the raw
+    signed N-day return, regardless of target — used for sample weighting."""
     macro = pull_macro(start, end)
     frames = []
     for ticker in tickers:
         df = pull(ticker, start=start, end=end)
         sector_etf = TICKER_SECTOR_ETF.get(ticker)
         X = compute_features(df, macro=macro, sector_etf=sector_etf)
+        r = make_returns(df["close"], horizon)
         if target == "3class":
             if label_mode == "vol_scaled":
                 y = make_3class_labels_vol_scaled(
@@ -65,12 +69,16 @@ def _build(
         elif target == "label":
             y = make_labels(df["close"], horizon)
         else:
-            y = make_returns(df["close"], horizon)
-        combined = X.join(y.rename(target)).dropna()
+            y = r
+        combined = X.join(y.rename(target)).join(r.rename("__fwd_ret")).dropna()
         frames.append(combined)
         print(f"  {ticker}: {len(combined)} rows")
     all_data = pd.concat(frames).sort_index()
-    return all_data.drop(columns=[target]), all_data[target]
+    return (
+        all_data.drop(columns=[target, "__fwd_ret"]),
+        all_data[target],
+        all_data["__fwd_ret"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +92,7 @@ def train_classifier_3class(
     label_mode: str = "fixed",  # "fixed" | "vol_scaled"
     vol_k: float = 1.0,
     vol_min_threshold: float = 0.005,
+    weight_clip: tuple[float, float] | None = None,
 ) -> CalibratedXGB3Class:
     """
     Train a 3-class XGBoost classifier with isotonic probability calibration.
@@ -96,7 +105,7 @@ def train_classifier_3class(
     training data. This makes the probability magnitudes meaningful.
     """
     print("=== 3-Class Classifier — Loading data ===")
-    X, y = _build(
+    X, y, fwd_ret = _build(
         tickers,
         "2015-01-01",
         "2024-12-31",
@@ -120,7 +129,12 @@ def train_classifier_3class(
 
     X_train, X_val, X_test = time_split(X, TRAIN_END, VAL_END)
     y_train, y_val, y_test = time_split(y, TRAIN_END, VAL_END)
-    print(f"  Train: {len(X_train)} rows  |  Val: {len(X_val)} rows  |  Test: {len(X_test)} rows\n")
+    fwd_train, _, _ = time_split(fwd_ret, TRAIN_END, VAL_END)
+    print(f"  Train: {len(X_train)} rows  |  Val: {len(X_val)} rows  |  Test: {len(X_test)} rows")
+    if weight_clip is not None:
+        print(f"  Sample weights: clip abs(return) to [{weight_clip[0]:.2%}, {weight_clip[1]:.2%}], normalised to mean=1\n")
+    else:
+        print()
 
     model = XGBClassifier(
         n_estimators=200,
@@ -136,7 +150,8 @@ def train_classifier_3class(
         eval_metric="mlogloss",
         verbosity=0,
     )
-    model.fit(X_train, y_train)
+    w_train = compute_sample_weights(fwd_train, weight_clip[0], weight_clip[1]) if weight_clip else None
+    model.fit(X_train, y_train, sample_weight=w_train)
 
     print("=== 3-Class Classifier — Feature Importance ===")
     importances = pd.Series(model.feature_importances_, index=X_train.columns)
@@ -175,7 +190,7 @@ def train_regressor(
     horizon: int = DEFAULT_HORIZON,
 ) -> XGBRegressor:
     print("\n=== Regressor — Loading data ===")
-    X, y = _build(tickers, "2015-01-01", "2024-12-31", target="return", horizon=horizon)
+    X, y, _ = _build(tickers, "2015-01-01", "2024-12-31", target="return", horizon=horizon)
     print(f"  Total: {len(X)} rows across {len(tickers)} tickers\n")
 
     X_train, _, X_test = time_split(X, TRAIN_END, VAL_END)

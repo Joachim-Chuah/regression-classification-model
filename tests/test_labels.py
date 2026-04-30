@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from src.labels import (
+    compute_sample_weights,
     make_3class_labels,
     make_3class_labels_vol_scaled,
     make_labels,
@@ -122,3 +123,23 @@ def test_3class_vol_scaled_uses_min_threshold_on_tiny_atr():
         min_threshold=0.01,  # 1% neutral floor
     ).dropna()
     assert (labels == 1.0).all()
+
+
+def test_compute_sample_weights_mean_one():
+    returns = np.array([-0.05, 0.01, 0.08, -0.03, 0.15])
+    w = compute_sample_weights(returns, clip_low=0.01, clip_high=0.10)
+    assert abs(w.mean() - 1.0) < 1e-10
+
+
+def test_compute_sample_weights_clip_respected():
+    returns = np.array([0.0001, 0.50])  # below clip_low and above clip_high
+    w = compute_sample_weights(returns, clip_low=0.01, clip_high=0.10)
+    raw = np.clip(np.abs(returns), 0.01, 0.10)
+    np.testing.assert_allclose(w, raw / raw.mean())
+
+
+def test_compute_sample_weights_accepts_series():
+    s = pd.Series([-0.03, 0.05, -0.08, 0.02])
+    w = compute_sample_weights(s, clip_low=0.01, clip_high=0.10)
+    assert len(w) == len(s)
+    assert abs(w.mean() - 1.0) < 1e-10

@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 
 from src.constants import NEUTRAL_THRESHOLD
@@ -75,3 +76,21 @@ def make_3class_labels_vol_scaled(
     labels[forward_return < -dynamic_threshold] = 0.0
     labels = labels.where(forward_return.notna())
     return labels
+
+
+def compute_sample_weights(
+    forward_return: "pd.Series | np.ndarray",
+    clip_low: float = 0.01,
+    clip_high: float = 0.10,
+) -> np.ndarray:
+    """
+    Sample weights proportional to abs(forward_return), clipped and normalised.
+
+    Rows with large realised moves get more weight; rows near the neutral
+    boundary get less. clip_low prevents near-zero returns from collapsing
+    to negligible weight; clip_high prevents a handful of extreme moves
+    from dominating the gradient. Normalised to mean=1 so the effective
+    learning rate is unchanged across different clip ranges.
+    """
+    w = np.clip(np.abs(np.asarray(forward_return, dtype=float)), clip_low, clip_high)
+    return w / w.mean()
