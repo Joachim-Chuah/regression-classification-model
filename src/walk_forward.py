@@ -14,6 +14,7 @@ pattern that will fail in production.
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import accuracy_score, brier_score_loss, precision_score, recall_score
 from xgboost import XGBClassifier
 
@@ -25,6 +26,7 @@ from src.data import pull, pull_macro
 from src.features import compute_features
 from src.labels import make_3class_labels, make_3class_labels_vol_scaled, make_returns
 from src.evaluate import signal_quality_table, topk_precision_table
+from src.models import CalibratedXGB3Class
 
 _REGIME_LABELS = {
     2020: "COVID crash",
@@ -58,6 +60,8 @@ def walk_forward_cv(
     label_mode: str = "fixed",  # "fixed" | "vol_scaled"
     vol_k: float = 1.0,
     vol_min_threshold: float = 0.005,
+    calibrate: bool = True,
+    cal_window_years: int = 1,
 ) -> pd.DataFrame:
     """
     Expanding-window walk-forward evaluation of the 3-class classifier.
@@ -65,6 +69,14 @@ def walk_forward_cv(
     Builds the full dataset once (parquet cache makes this fast after the
     first run), then for each test year trains on all prior data and
     evaluates on that year alone. Returns a summary DataFrame.
+
+    calibrate=True (default) mirrors the production training path: the last
+    cal_window_years of each training window are held out as a calibration
+    set for per-class isotonic regression, exactly as train.py does on the
+    val set. This makes Brier skill comparable to production.
+
+    calibrate=False uses a raw XGBClassifier on the full training window
+    (legacy behaviour, kept for comparison).
 
     If export_csv_path is provided, writes the summary DataFrame to CSV.
     """
@@ -74,9 +86,11 @@ def walk_forward_cv(
     print("=== Walk-Forward Cross-Validation ===")
     print(f"  Tickers: {len(tickers)}  |  Horizon: {horizon}d  |  Years: {test_years}")
     if label_mode == "vol_scaled":
-        print(f"  Label mode: vol_scaled (k={vol_k:.2f}, min={vol_min_threshold:.2%})\n")
+        print(f"  Label mode: vol_scaled (k={vol_k:.2f}, min={vol_min_threshold:.2%})")
     else:
-        print(f"  Label mode: fixed (±{NEUTRAL_THRESHOLD:.0%})\n")
+        print(f"  Label mode: fixed (±{NEUTRAL_THRESHOLD:.0%})")
+    cal_note = f"calibrated (cal_window={cal_window_years}y)" if calibrate else "raw (no calibration)"
+    print(f"  Calibration: {cal_note}\n")
 
     # Build the full 2015-2024 dataset once
     print("  Building full dataset (using parquet cache where available)...")
@@ -121,11 +135,33 @@ def walk_forward_cv(
             print(f"  {test_year}: insufficient data, skipping")
             continue
 
-        model = XGBClassifier(**_XGB_PARAMS)
-        model.fit(X_train, y_train)
+        if calibrate:
+            xgb_train_end = f"{test_year - 1 - cal_window_years}-12-31"
+            cal_start     = f"{test_year - cal_window_years}-01-01"
+            cal_end       = f"{test_year - 1}-12-31"
+            X_train_xgb   = X_all[X_all.index <= xgb_train_end]
+            y_train_xgb   = y_all[y_all.index <= xgb_train_end]
+            X_cal         = X_all[(X_all.index >= cal_start) & (X_all.index <= cal_end)]
+            y_cal         = y_all[(y_all.index >= cal_start) & (y_all.index <= cal_end)]
+            if len(X_train_xgb) < 1000 or len(X_cal) < 100:
+                print(f"  {test_year}: insufficient data for calibration split, skipping")
+                continue
+            xgb = XGBClassifier(**_XGB_PARAMS)
+            xgb.fit(X_train_xgb, y_train_xgb)
+            raw_cal = xgb.predict_proba(X_cal)
+            calibrators = []
+            for k in range(3):
+                iso = IsotonicRegression(out_of_bounds="clip")
+                iso.fit(raw_cal[:, k], (y_cal == k).astype(float))
+                calibrators.append(iso)
+            fitted_model = CalibratedXGB3Class(xgb, calibrators)
+        else:
+            xgb = XGBClassifier(**_XGB_PARAMS)
+            xgb.fit(X_train, y_train)
+            fitted_model = xgb
 
-        y_pred  = model.predict(X_test)
-        y_proba = model.predict_proba(X_test)
+        y_pred  = fitted_model.predict(X_test)
+        y_proba = fitted_model.predict_proba(X_test)
 
         y_up_bin       = (y_test == 2).astype(int)
         p_up           = y_proba[:, 2]
@@ -167,7 +203,8 @@ def walk_forward_cv(
         results.append({
             "year":        test_year,
             "regime":      regime,
-            "train_rows":  len(X_train),
+            "train_rows":  len(X_train_xgb) if calibrate else len(X_train),
+            "cal_rows":    len(X_cal) if calibrate else 0,
             "test_rows":   len(X_test),
             "accuracy":    acc,
             "up_precision": up_prec,
