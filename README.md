@@ -13,22 +13,56 @@ pip install -e ".[dev]"
 brew install libomp
 ```
 
-## Daily use — signal scanner
-
+## How to Run (Current Workflow)
 Run after 4:30pm ET on a trading day to get signals based on the latest settled close.
 
+Run these from the `regression-classification-model` directory.
+
+### 1) Train both models and save artifacts
+
 ```bash
-# LEAPS mode (default) — signals for 2-6 month options
-python predict.py
-python predict.py AAPL MSFT GOOGL NVDA
-
-# Swing mode — signals for 1-2 week stock holds
-python predict.py --mode swing
-python predict.py --mode swing AAPL MSFT NVDA
-
-# Tickers can be typed with or without commas
-python predict.py AAPL, MSFT, GOOGL
+python -m src.train
 ```
+
+This trains:
+- 3-class classifier (`xgb_clf3`, isotonic-calibrated)
+- regressor (`xgb_reg`)
+
+Artifacts are saved under `artifacts/`.
+
+### 2) Run walk-forward evaluation and export metrics CSV
+
+```bash
+python -m src.walk_forward
+```
+
+This prints per-year fold metrics and writes:
+- `artifacts/metrics/walk_forward_summary.csv`
+
+### 3) Run the daily scanner
+
+```bash
+# default watchlist, LEAPS mode
+python predict.py
+
+# swing mode
+python predict.py --mode swing
+
+# custom tickers
+python predict.py AAPL NVDA MSFT
+```
+
+### 4) Run tests
+
+```bash
+# full suite (includes integration tests that may hit live network data)
+pytest tests/ -v
+
+# stable local quick check (no integration tests)
+pytest tests/ -m "not integration" -v
+```
+
+---
 
 **Threshold guide** (backtested precision on 2024 test set):
 
