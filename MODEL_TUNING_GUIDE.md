@@ -5,56 +5,6 @@ what we tried, why, in what order, and what each step taught us.
 
 ---
 
-## How to Run (Current Workflow)
-
-Run these from the `regression-classification-model` directory.
-
-### 1) Train both models and save artifacts
-
-```bash
-python -m src.train
-```
-
-This trains:
-- 3-class classifier (`xgb_clf3`, isotonic-calibrated)
-- regressor (`xgb_reg`)
-
-Artifacts are saved under `artifacts/`.
-
-### 2) Run walk-forward evaluation and export metrics CSV
-
-```bash
-python -m src.walk_forward
-```
-
-This prints per-year fold metrics and writes:
-- `artifacts/metrics/walk_forward_summary.csv`
-
-### 3) Run the daily scanner
-
-```bash
-# default watchlist, LEAPS mode
-python predict.py
-
-# swing mode
-python predict.py --mode swing
-
-# custom tickers
-python predict.py AAPL NVDA MSFT
-```
-
-### 4) Run tests
-
-```bash
-# full suite (includes integration tests that may hit live network data)
-pytest tests/ -v
-
-# stable local quick check (no integration tests)
-pytest tests/ -m "not integration" -v
-```
-
----
-
 ## The Big Picture First
 
 The goal is to predict whether a stock will be up or down over the next 20
@@ -571,7 +521,7 @@ This is intentional — silent feature drift would be far worse than a loud erro
 
 ---
 
-## Current Status (2026-04-29)
+## Updated Status (2026-04-29 10:30PM)
 
 This section reflects the repository as it stands right now.
 
