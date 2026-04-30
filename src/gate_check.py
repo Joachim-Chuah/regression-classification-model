@@ -41,6 +41,7 @@ class GateResult:
     delta: float
     tolerance: float
     passed: bool
+    reason: str | None = None
 
 
 def _mean_valid(df: pd.DataFrame, col: str) -> float:
@@ -65,12 +66,24 @@ def run_gates(
     tol_2022_prec: float = 0.03,
     tol_2022_ret: float = 0.01,
     coverage_floor: float = 0.75,
+    fail_on_missing: bool = True,
 ) -> list[GateResult]:
     results: list[GateResult] = []
 
     def gate(label: str, group: str, b: float, c: float, tol: float) -> None:
         if np.isnan(b) or np.isnan(c):
-            return  # skip rather than auto-fail when data is missing
+            if fail_on_missing:
+                results.append(GateResult(
+                    label=label,
+                    group=group,
+                    baseline=b,
+                    challenger=c,
+                    delta=float("nan"),
+                    tolerance=tol,
+                    passed=False,
+                    reason="missing metric value",
+                ))
+            return
         results.append(GateResult(
             label=label, group=group,
             baseline=b, challenger=c,
@@ -118,6 +131,17 @@ def run_gates(
             tolerance=b_cov * (1 - coverage_floor),
             passed=c_cov >= floor,
         ))
+    elif fail_on_missing:
+        results.append(GateResult(
+            label="p60_coverage",
+            group="C: coverage floor",
+            baseline=b_cov,
+            challenger=c_cov,
+            delta=float("nan"),
+            tolerance=float("nan"),
+            passed=False,
+            reason="missing coverage metric",
+        ))
 
     return results
 
@@ -156,7 +180,8 @@ def print_report(
             result  = PASS if r.passed else FAIL
             if not r.passed:
                 all_passed = False
-            print(f"  {r.label:<26} {b_str:>9}  {c_str:>10}  {d_str:>8}  {tol_str:>6}  {result}")
+            suffix = f" ({r.reason})" if r.reason else ""
+            print(f"  {r.label:<26} {b_str:>9}  {c_str:>10}  {d_str:>8}  {tol_str:>6}  {result}{suffix}")
 
     print()
     print("=" * width)
@@ -166,7 +191,10 @@ def print_report(
     else:
         print(f"  OVERALL: FAIL — {len(failures)} gate(s) failed:")
         for r in failures:
-            print(f"    • [{r.group}] {r.label}  delta={r.delta:+.1%}  tolerance=±{r.tolerance:.1%}")
+            if np.isnan(r.delta) or np.isnan(r.tolerance):
+                print(f"    • [{r.group}] {r.label}  reason={r.reason or 'failed'}")
+            else:
+                print(f"    • [{r.group}] {r.label}  delta={r.delta:+.1%}  tolerance=±{r.tolerance:.1%}")
     print("=" * width)
 
     return all_passed
@@ -184,6 +212,11 @@ def main() -> None:
     parser.add_argument("--tol-2022-prec",  type=float, default=0.03,  help="Max 2022 precision regression (default 0.03).")
     parser.add_argument("--tol-2022-ret",   type=float, default=0.01,  help="Max 2022 return regression (default 0.01).")
     parser.add_argument("--coverage-floor", type=float, default=0.75,  help="Min challenger/baseline coverage ratio (default 0.75).")
+    parser.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help="Allow missing metrics by skipping those gates (default: fail on missing).",
+    )
     args = parser.parse_args()
 
     baseline   = pd.read_csv(args.baseline)
@@ -196,6 +229,7 @@ def main() -> None:
         tol_2022_prec=args.tol_2022_prec,
         tol_2022_ret=args.tol_2022_ret,
         coverage_floor=args.coverage_floor,
+        fail_on_missing=not args.allow_missing,
     )
 
     passed = print_report(args.baseline, args.challenger, results)

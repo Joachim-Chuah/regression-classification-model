@@ -96,7 +96,7 @@ def test_coverage_floor_passes_when_adequate():
 def test_nan_gate_skipped_not_failed():
     base = _make_df(p70=float("nan"))
     chal = _make_df(p70=float("nan"))
-    results = run_gates(base, chal)
+    results = run_gates(base, chal, fail_on_missing=False)
     p70_gates = [r for r in results if r.label == "p70_prec"]
     assert len(p70_gates) == 0  # skipped, not counted as failure
 
@@ -104,6 +104,24 @@ def test_nan_gate_skipped_not_failed():
 def test_missing_2022_skips_hard_floor():
     base = _make_df(years=(2020, 2021, 2023, 2024))
     chal = _make_df(years=(2020, 2021, 2023, 2024))
-    results = run_gates(base, chal)
+    results = run_gates(base, chal, fail_on_missing=False)
     group_b = [r for r in results if r.group == "B: 2022 hard floor"]
     assert len(group_b) == 0  # no 2022 row → gates skipped
+
+
+def test_nan_gate_fails_by_default():
+    base = _make_df(p70=float("nan"))
+    chal = _make_df(p70=float("nan"))
+    results = run_gates(base, chal)  # default fail_on_missing=True
+    p70_gates = [r for r in results if r.label == "p70_prec"]
+    assert len(p70_gates) == 1
+    assert not p70_gates[0].passed
+
+
+def test_missing_2022_fails_by_default():
+    base = _make_df(years=(2020, 2021, 2023, 2024))
+    chal = _make_df(years=(2020, 2021, 2023, 2024))
+    results = run_gates(base, chal)  # default fail_on_missing=True
+    group_b = [r for r in results if r.group == "B: 2022 hard floor"]
+    assert len(group_b) == 3
+    assert all(not r.passed for r in group_b)
