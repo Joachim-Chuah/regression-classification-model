@@ -48,3 +48,30 @@ def make_3class_labels(
     labels[forward_return < -threshold] = 0.0    # down
     labels = labels.where(forward_return.notna())
     return labels
+
+
+def make_3class_labels_vol_scaled(
+    close: pd.Series,
+    atr_pct: pd.Series,
+    horizon: int = 5,
+    k: float = 1.0,
+    min_threshold: float = 0.005,
+) -> pd.Series:
+    """
+    3-class label with a volatility-scaled neutral zone.
+
+    Neutral threshold at time t is:
+        threshold_t = max(min_threshold, k * atr_pct_t)
+
+    This keeps the neutral band tighter in low-vol regimes and wider in
+    high-vol regimes, so the model is not forced to classify tiny noisy moves
+    as directional signals.
+    """
+    forward_return = close.shift(-horizon) / close - 1
+    dynamic_threshold = (k * atr_pct).clip(lower=min_threshold)
+
+    labels = pd.Series(1.0, index=close.index)  # default: neutral
+    labels[forward_return > dynamic_threshold] = 2.0
+    labels[forward_return < -dynamic_threshold] = 0.0
+    labels = labels.where(forward_return.notna())
+    return labels

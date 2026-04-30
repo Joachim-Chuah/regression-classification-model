@@ -5,6 +5,45 @@ what we tried, why, in what order, and what each step taught us.
 
 ---
 
+## How to Run (Current Workflow)
+
+Run these from the `regression-classification-model` directory.
+
+### A) Standard train/eval loop
+
+```bash
+# Train calibrated 3-class classifier + regressor
+python -m src.train
+
+# Walk-forward across 2020-2024 and save summary CSV
+python -m src.walk_forward
+
+# Generate latest signal table
+python predict.py
+```
+
+### B) Volatility-scaled label experiments
+
+```bash
+# Fixed baseline + vol-scaled sweeps (k=0.75,1.0,1.25)
+python -m src.experiments
+```
+
+This writes per-run CSVs under:
+- `artifacts/metrics/experiments/`
+
+### C) Test loop for rapid iteration
+
+```bash
+# Stable local checks (no network)
+pytest tests/ -m "not integration" -v
+
+# Full suite (includes yfinance integration checks)
+pytest tests/ -v
+```
+
+---
+
 ## The Big Picture First
 
 The goal is to predict whether a stock will be up or down over the next 20
@@ -556,6 +595,29 @@ Walk-forward runs can now persist fold metrics to CSV for experiment tracking.
 
 This enables side-by-side comparison of model variants without manually copying
 terminal output.
+
+### Labeling modes now supported
+
+Both training and walk-forward support two label modes for 3-class targets:
+
+- `fixed` (existing): neutral band is constant at ±2%.
+- `vol_scaled` (new): neutral band is dynamic using
+  `max(vol_min_threshold, vol_k * atr_pct)`.
+
+This allows cleaner comparison of static vs volatility-aware labeling without
+changing model architecture.
+
+### Brier interpretation (current guidance)
+
+Brier skill remains an important calibration signal, but it should not be the
+only promotion gate for this strategy. Prioritize:
+
+1. Threshold precision (`p60_precision`, `p70_precision`)
+2. Top-k precision (`top10_precision`, `top20_precision`)
+3. Realized forward return of selected signals (`p60_mean_return`, `top10_mean_return`)
+
+Use Brier to detect calibration drift and probability quality regressions, while
+decision thresholds and selected-return metrics drive trading utility.
 
 ### Practical tuning focus from here
 

@@ -30,6 +30,18 @@ This trains:
 
 Artifacts are saved under `artifacts/`.
 
+Optional: train with volatility-scaled labels for the classifier:
+
+```python
+from src.train import train_classifier_3class
+
+train_classifier_3class(
+    label_mode="vol_scaled",
+    vol_k=1.0,
+    vol_min_threshold=0.005,
+)
+```
+
 ### 2) Run walk-forward evaluation and export metrics CSV
 
 ```bash
@@ -38,6 +50,28 @@ python -m src.walk_forward
 
 This prints per-year fold metrics and writes:
 - `artifacts/metrics/walk_forward_summary.csv`
+
+Optional: run walk-forward with volatility-scaled labels:
+
+```python
+from src.walk_forward import walk_forward_cv
+
+walk_forward_cv(
+    label_mode="vol_scaled",
+    vol_k=1.0,
+    vol_min_threshold=0.005,
+    export_csv_path="artifacts/metrics/walk_forward_vol_scaled.csv",
+)
+```
+
+Optional: run a volatility-scaled label sweep (`k=0.75,1.0,1.25` + fixed baseline):
+
+```bash
+python -m src.experiments
+```
+
+Writes one CSV per run under:
+- `artifacts/metrics/experiments/`
 
 ### 3) Run the daily scanner
 
@@ -62,7 +96,34 @@ pytest tests/ -v
 pytest tests/ -m "not integration" -v
 ```
 
+### 5) Experiment sweep (recommended tuning loop)
+
+```bash
+python -m src.experiments
+```
+
+Default sweep:
+- fixed-threshold baseline
+- volatility-scaled labels with `k=0.75, 1.0, 1.25`
+
+CSV outputs:
+- `artifacts/metrics/experiments/walk_forward_fixed.csv`
+- `artifacts/metrics/experiments/walk_forward_vol_scaled_k0.75.csv`
+- `artifacts/metrics/experiments/walk_forward_vol_scaled_k1.00.csv`
+- `artifacts/metrics/experiments/walk_forward_vol_scaled_k1.25.csv`
+
 ---
+
+## Metric Priorities (Important)
+
+Brier skill is useful, but for this strategy do not optimize on Brier alone.
+Primary promotion metrics should be:
+
+- `p60_precision`, `p70_precision`
+- `top10_precision`, `top20_precision`
+- `p60_mean_return`, `top10_mean_return`
+
+Use Brier as a calibration health check, not the only gate.
 
 **Threshold guide** (backtested precision on 2024 test set):
 
@@ -91,10 +152,7 @@ Training covers 2015–2023 (train + val) and evaluates on 2024 (test). You do n
 ## Walk-forward cross-validation
 
 Validates the model across 5 distinct market regimes (2020–2024) rather than a single test year.
-
-```bash
-python -m src.walk_forward
-```
+Use the workflow above for standard and vol-scaled runs.
 
 ## Tests
 

@@ -2,7 +2,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.labels import make_labels, make_returns, make_3class_labels
+from src.labels import (
+    make_3class_labels,
+    make_3class_labels_vol_scaled,
+    make_labels,
+    make_returns,
+)
 
 
 @pytest.fixture
@@ -91,3 +96,29 @@ def test_3class_valid_count(close):
     horizon = 5
     labels = make_3class_labels(close, horizon=horizon)
     assert labels.notna().sum() == len(close) - horizon
+
+
+def test_3class_vol_scaled_only_valid_values(close):
+    atr = pd.Series(np.full(len(close), 0.02), index=close.index)
+    labels = make_3class_labels_vol_scaled(close, atr_pct=atr, horizon=5).dropna()
+    assert set(labels.unique()).issubset({0.0, 1.0, 2.0})
+
+
+def test_3class_vol_scaled_increasing_series_labels_up(close):
+    atr = pd.Series(np.full(len(close), 0.02), index=close.index)
+    labels = make_3class_labels_vol_scaled(close, atr_pct=atr, horizon=5).dropna()
+    assert (labels == 2.0).all()
+
+
+def test_3class_vol_scaled_uses_min_threshold_on_tiny_atr():
+    dates = pd.date_range("2020-01-01", periods=20, freq="B")
+    close_small_move = pd.Series(np.linspace(100.0, 100.4, 20), index=dates)
+    atr_tiny = pd.Series(np.full(20, 0.0001), index=dates)
+    labels = make_3class_labels_vol_scaled(
+        close_small_move,
+        atr_pct=atr_tiny,
+        horizon=5,
+        k=1.0,
+        min_threshold=0.01,  # 1% neutral floor
+    ).dropna()
+    assert (labels == 1.0).all()

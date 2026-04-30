@@ -23,7 +23,7 @@ from src.constants import (
 )
 from src.data import pull, pull_macro
 from src.features import compute_features
-from src.labels import make_3class_labels, make_returns
+from src.labels import make_3class_labels, make_3class_labels_vol_scaled, make_returns
 from src.evaluate import signal_quality_table, topk_precision_table
 
 _REGIME_LABELS = {
@@ -55,6 +55,9 @@ def walk_forward_cv(
     horizon: int = DEFAULT_HORIZON,
     test_years: list[int] | None = None,
     export_csv_path: str | None = None,
+    label_mode: str = "fixed",  # "fixed" | "vol_scaled"
+    vol_k: float = 1.0,
+    vol_min_threshold: float = 0.005,
 ) -> pd.DataFrame:
     """
     Expanding-window walk-forward evaluation of the 3-class classifier.
@@ -69,7 +72,11 @@ def walk_forward_cv(
         test_years = [2020, 2021, 2022, 2023, 2024]
 
     print("=== Walk-Forward Cross-Validation ===")
-    print(f"  Tickers: {len(tickers)}  |  Horizon: {horizon}d  |  Years: {test_years}\n")
+    print(f"  Tickers: {len(tickers)}  |  Horizon: {horizon}d  |  Years: {test_years}")
+    if label_mode == "vol_scaled":
+        print(f"  Label mode: vol_scaled (k={vol_k:.2f}, min={vol_min_threshold:.2%})\n")
+    else:
+        print(f"  Label mode: fixed (±{NEUTRAL_THRESHOLD:.0%})\n")
 
     # Build the full 2015-2024 dataset once
     print("  Building full dataset (using parquet cache where available)...")
@@ -79,7 +86,16 @@ def walk_forward_cv(
         df = pull(ticker, start="2015-01-01", end="2024-12-31")
         sector_etf = TICKER_SECTOR_ETF.get(ticker)
         X_ticker = compute_features(df, macro=macro, sector_etf=sector_etf)
-        y_ticker = make_3class_labels(df["close"], horizon, NEUTRAL_THRESHOLD)
+        if label_mode == "vol_scaled":
+            y_ticker = make_3class_labels_vol_scaled(
+                df["close"],
+                atr_pct=X_ticker["atr_pct"],
+                horizon=horizon,
+                k=vol_k,
+                min_threshold=vol_min_threshold,
+            )
+        else:
+            y_ticker = make_3class_labels(df["close"], horizon, NEUTRAL_THRESHOLD)
         r_ticker = make_returns(df["close"], horizon).rename("forward_return")
         combined = X_ticker.join(y_ticker.rename("label")).join(r_ticker).dropna()
         frames.append(combined)

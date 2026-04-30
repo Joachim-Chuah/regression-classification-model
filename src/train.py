@@ -12,7 +12,12 @@ from src.constants import (
 from src.data import pull, pull_macro
 from src.evaluate import evaluate, evaluate_3class, evaluate_regressor, threshold_analysis
 from src.features import compute_features
-from src.labels import make_3class_labels, make_labels, make_returns
+from src.labels import (
+    make_3class_labels,
+    make_3class_labels_vol_scaled,
+    make_labels,
+    make_returns,
+)
 from src.serialize import save_artifact
 from src.splits import time_split
 
@@ -36,6 +41,9 @@ def _build(
     end: str,
     target: str,   # "label" | "3class" | "return"
     horizon: int = DEFAULT_HORIZON,
+    label_mode: str = "fixed",  # "fixed" | "vol_scaled"
+    vol_k: float = 1.0,
+    vol_min_threshold: float = 0.005,
 ) -> tuple[pd.DataFrame, pd.Series]:
     macro = pull_macro(start, end)
     frames = []
@@ -44,7 +52,16 @@ def _build(
         sector_etf = TICKER_SECTOR_ETF.get(ticker)
         X = compute_features(df, macro=macro, sector_etf=sector_etf)
         if target == "3class":
-            y = make_3class_labels(df["close"], horizon, NEUTRAL_THRESHOLD)
+            if label_mode == "vol_scaled":
+                y = make_3class_labels_vol_scaled(
+                    df["close"],
+                    atr_pct=X["atr_pct"],
+                    horizon=horizon,
+                    k=vol_k,
+                    min_threshold=vol_min_threshold,
+                )
+            else:
+                y = make_3class_labels(df["close"], horizon, NEUTRAL_THRESHOLD)
         elif target == "label":
             y = make_labels(df["close"], horizon)
         else:
@@ -64,6 +81,9 @@ def train_classifier_3class(
     tickers: list[str] = DEFAULT_TICKERS,
     version: str = "1.1.0",
     horizon: int = DEFAULT_HORIZON,
+    label_mode: str = "fixed",  # "fixed" | "vol_scaled"
+    vol_k: float = 1.0,
+    vol_min_threshold: float = 0.005,
 ) -> CalibratedXGB3Class:
     """
     Train a 3-class XGBoost classifier with isotonic probability calibration.
@@ -76,10 +96,27 @@ def train_classifier_3class(
     training data. This makes the probability magnitudes meaningful.
     """
     print("=== 3-Class Classifier — Loading data ===")
-    X, y = _build(tickers, "2015-01-01", "2024-12-31", target="3class", horizon=horizon)
+    X, y = _build(
+        tickers,
+        "2015-01-01",
+        "2024-12-31",
+        target="3class",
+        horizon=horizon,
+        label_mode=label_mode,
+        vol_k=vol_k,
+        vol_min_threshold=vol_min_threshold,
+    )
     print(f"  Total: {len(X)} rows across {len(tickers)} tickers")
-    print(f"  Threshold: ±{NEUTRAL_THRESHOLD:.0%}  |  "
-          f"down:{(y==0).mean():.1%}  neutral:{(y==1).mean():.1%}  up:{(y==2).mean():.1%}\n")
+    if label_mode == "vol_scaled":
+        print(
+            f"  Label mode: vol_scaled (k={vol_k:.2f}, min={vol_min_threshold:.2%})  |  "
+            f"down:{(y==0).mean():.1%}  neutral:{(y==1).mean():.1%}  up:{(y==2).mean():.1%}\n"
+        )
+    else:
+        print(
+            f"  Label mode: fixed (±{NEUTRAL_THRESHOLD:.0%})  |  "
+            f"down:{(y==0).mean():.1%}  neutral:{(y==1).mean():.1%}  up:{(y==2).mean():.1%}\n"
+        )
 
     X_train, X_val, X_test = time_split(X, TRAIN_END, VAL_END)
     y_train, y_val, y_test = time_split(y, TRAIN_END, VAL_END)
