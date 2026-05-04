@@ -88,7 +88,7 @@ def _build(
 
 def train_classifier_3class(
     tickers: list[str] = DEFAULT_TICKERS,
-    version: str = "1.1.0",
+    version: str = "1.2.0",
     horizon: int = DEFAULT_HORIZON,
     label_mode: str = "fixed",  # "fixed" | "vol_scaled"
     vol_k: float = 1.0,
