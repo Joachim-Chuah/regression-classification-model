@@ -60,7 +60,7 @@ def walk_forward_cv(
     label_mode: str = "fixed",  # "fixed" | "vol_scaled"
     vol_k: float = 1.0,
     vol_min_threshold: float = 0.005,
-    calibrate: bool = True,
+    calibrate: bool = False,
     cal_window_years: int = 1,
     weight_clip: tuple[float, float] | None = None,
 ) -> pd.DataFrame:
@@ -71,13 +71,16 @@ def walk_forward_cv(
     first run), then for each test year trains on all prior data and
     evaluates on that year alone. Returns a summary DataFrame.
 
-    calibrate=True (default) mirrors the production training path: the last
-    cal_window_years of each training window are held out as a calibration
-    set for per-class isotonic regression, exactly as train.py does on the
-    val set. This makes Brier skill comparable to production.
+    calibrate=False (default) uses raw XGBoost probabilities on the full
+    training window. This is more stable across folds because per-fold
+    isotonic calibration is highly sensitive to the regime of the single
+    calibration year (e.g. calibrating on a bear year suppresses P(up)
+    for the following recovery year, causing near-zero coverage).
 
-    calibrate=False uses a raw XGBClassifier on the full training window
-    (legacy behaviour, kept for comparison).
+    calibrate=True holds out the last cal_window_years of each training
+    window as an isotonic calibration set, mirroring the production path.
+    Use it for direct Brier score comparison against production, but
+    interpret coverage/precision metrics with caution due to regime sensitivity.
 
     If export_csv_path is provided, writes the summary DataFrame to CSV.
     """
@@ -257,7 +260,9 @@ if __name__ == "__main__":
     _p = _ap.ArgumentParser()
     _p.add_argument("--output", default="artifacts/metrics/experiments/walk_forward_summary.csv",
                     help="Path to write the CSV results.")
+    _p.add_argument("--no-calibrate", action="store_true",
+                    help="Skip per-fold isotonic calibration (use raw XGBoost probabilities).")
     _args = _p.parse_args()
-    results = walk_forward_cv(export_csv_path=_args.output)
+    results = walk_forward_cv(export_csv_path=_args.output, calibrate=not _args.no_calibrate)
     print("\nFull results:")
     print(results.to_string(index=False))
