@@ -19,6 +19,9 @@ TICKER_SECTOR_ETF = {
 DEFAULT_HORIZON = 20        # trading days forward
 NEUTRAL_THRESHOLD = 0.02    # ±2% — returns inside this band are labeled "neutral"
 
+SWING_HORIZON = 5           # trading days forward for swing model
+SWING_NEUTRAL_THRESHOLD = 0.01  # ±1% neutral band for 5-day returns
+
 TRAIN_START = "2015-01-01"
 TRAIN_END = "2023-06-30"   # includes 2022 crash + 2023 recovery w/ inverted curve
 VAL_START = "2023-07-01"

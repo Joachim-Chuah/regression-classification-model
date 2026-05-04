@@ -7,7 +7,8 @@ from xgboost import XGBClassifier, XGBRegressor
 
 from src.constants import (
     DEFAULT_HORIZON, DEFAULT_TICKERS, NEUTRAL_THRESHOLD,
-    RANDOM_STATE, TICKER_SECTOR_ETF, TRAIN_END, VAL_END,
+    RANDOM_STATE, SWING_HORIZON, SWING_NEUTRAL_THRESHOLD,
+    TICKER_SECTOR_ETF, TRAIN_END, VAL_END,
 )
 from src.data import pull, pull_earnings_dates, pull_macro
 from src.evaluate import evaluate, evaluate_3class, evaluate_regressor, threshold_analysis
@@ -45,6 +46,7 @@ def _build(
     label_mode: str = "fixed",  # "fixed" | "vol_scaled"
     vol_k: float = 1.0,
     vol_min_threshold: float = 0.005,
+    neutral_threshold: float = NEUTRAL_THRESHOLD,
 ) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
     """Returns (X, y, forward_return). forward_return is always the raw
     signed N-day return, regardless of target — used for sample weighting."""
@@ -66,7 +68,7 @@ def _build(
                     min_threshold=vol_min_threshold,
                 )
             else:
-                y = make_3class_labels(df["close"], horizon, NEUTRAL_THRESHOLD)
+                y = make_3class_labels(df["close"], horizon, neutral_threshold)
         elif target == "label":
             y = make_labels(df["close"], horizon)
         else:
@@ -90,22 +92,24 @@ def train_classifier_3class(
     tickers: list[str] = DEFAULT_TICKERS,
     version: str = "1.2.0",
     horizon: int = DEFAULT_HORIZON,
+    neutral_threshold: float = NEUTRAL_THRESHOLD,
     label_mode: str = "fixed",  # "fixed" | "vol_scaled"
     vol_k: float = 1.0,
     vol_min_threshold: float = 0.005,
     weight_clip: tuple[float, float] | None = None,
+    model_name: str = "xgb_clf3",
 ) -> CalibratedXGB3Class:
     """
     Train a 3-class XGBoost classifier with isotonic probability calibration.
 
-    Classes: 0=down, 1=neutral, 2=up  (neutral = return within ±NEUTRAL_THRESHOLD)
+    Classes: 0=down, 1=neutral, 2=up  (neutral = return within ±neutral_threshold)
     predict_proba(X) returns shape (N, 3): [P(down), P(neutral), P(up)]
     For Rylo: use proba[:,2] as P(up) and proba[:,0] as P(down).
 
     Calibration is fit on the held-out val set so it is never exposed to
     training data. This makes the probability magnitudes meaningful.
     """
-    print("=== 3-Class Classifier — Loading data ===")
+    print(f"=== 3-Class Classifier ({model_name}) — Loading data ===")
     X, y, fwd_ret = _build(
         tickers,
         "2015-01-01",
@@ -115,6 +119,7 @@ def train_classifier_3class(
         label_mode=label_mode,
         vol_k=vol_k,
         vol_min_threshold=vol_min_threshold,
+        neutral_threshold=neutral_threshold,
     )
     print(f"  Total: {len(X)} rows across {len(tickers)} tickers")
     if label_mode == "vol_scaled":
@@ -124,7 +129,7 @@ def train_classifier_3class(
         )
     else:
         print(
-            f"  Label mode: fixed (±{NEUTRAL_THRESHOLD:.0%})  |  "
+            f"  Label mode: fixed (±{neutral_threshold:.0%})  |  "
             f"down:{(y==0).mean():.1%}  neutral:{(y==1).mean():.1%}  up:{(y==2).mean():.1%}\n"
         )
 
@@ -154,13 +159,13 @@ def train_classifier_3class(
     w_train = compute_sample_weights(fwd_train, weight_clip[0], weight_clip[1]) if weight_clip else None
     model.fit(X_train, y_train, sample_weight=w_train)
 
-    print("=== 3-Class Classifier — Feature Importance ===")
+    print(f"=== 3-Class Classifier ({model_name}) — Feature Importance ===")
     importances = pd.Series(model.feature_importances_, index=X_train.columns)
     print(importances.sort_values(ascending=False).to_string())
     print()
 
     # --- Isotonic calibration on val set ---
-    print("=== 3-Class Classifier — Calibrating on val set ===")
+    print(f"=== 3-Class Classifier ({model_name}) — Calibrating on val set ===")
     raw_val_proba = model.predict_proba(X_val)
     calibrators = []
     for k in range(3):
@@ -170,13 +175,13 @@ def train_classifier_3class(
     calibrated = CalibratedXGB3Class(model, calibrators)
     print("  Done.\n")
 
-    print("=== 3-Class Classifier — Test ===")
+    print(f"=== 3-Class Classifier ({model_name}) — Test ===")
     evaluate_3class(calibrated, X_test, y_test)
     threshold_analysis(calibrated, X_test, y_test)
 
     save_artifact(
         calibrated, list(X_train.columns),
-        version=version, ticker="multi", model_name="xgb_clf3",
+        version=version, ticker="multi", model_name=model_name,
     )
     return calibrated
 
@@ -189,8 +194,9 @@ def train_regressor(
     tickers: list[str] = DEFAULT_TICKERS,
     version: str = "0.3.0",
     horizon: int = DEFAULT_HORIZON,
+    model_name: str = "xgb_reg",
 ) -> XGBRegressor:
-    print("\n=== Regressor — Loading data ===")
+    print(f"\n=== Regressor ({model_name}) — Loading data ===")
     X, y, _ = _build(tickers, "2015-01-01", "2024-12-31", target="return", horizon=horizon)
     print(f"  Total: {len(X)} rows across {len(tickers)} tickers\n")
 
@@ -210,23 +216,23 @@ def train_regressor(
     )
     model.fit(X_train, y_train)
 
-    print("=== Regressor — Feature Importance ===")
+    print(f"=== Regressor ({model_name}) — Feature Importance ===")
     importances = pd.Series(model.feature_importances_, index=X_train.columns)
     print(importances.sort_values(ascending=False).to_string())
     print()
 
-    print("=== Regressor — Test ===")
+    print(f"=== Regressor ({model_name}) — Test ===")
     evaluate_regressor(model, X_test, y_test)
 
     save_artifact(
         model, list(X_train.columns),
-        version=version, ticker="multi", model_name="xgb_reg",
+        version=version, ticker="multi", model_name=model_name,
     )
     return model
 
 
 # ---------------------------------------------------------------------------
-# Train both
+# Train both (daily model)
 # ---------------------------------------------------------------------------
 
 def train_both(
@@ -238,5 +244,38 @@ def train_both(
     return clf, reg
 
 
+# ---------------------------------------------------------------------------
+# Swing model (horizon=5)
+# ---------------------------------------------------------------------------
+
+def train_swing_model(
+    tickers: list[str] = DEFAULT_TICKERS,
+    clf_version: str = "1.0.0",
+    reg_version: str = "1.0.0",
+) -> tuple[CalibratedXGB3Class, XGBRegressor]:
+    """Train 5-day classifier + regressor for swing trade signals."""
+    clf = train_classifier_3class(
+        tickers=tickers,
+        version=clf_version,
+        horizon=SWING_HORIZON,
+        neutral_threshold=SWING_NEUTRAL_THRESHOLD,
+        model_name="xgb_clf3_5d",
+    )
+    reg = train_regressor(
+        tickers=tickers,
+        version=reg_version,
+        horizon=SWING_HORIZON,
+        model_name="xgb_reg_5d",
+    )
+    return clf, reg
+
+
 if __name__ == "__main__":
-    train_both()
+    import argparse as _ap
+    _p = _ap.ArgumentParser()
+    _p.add_argument("--swing", action="store_true", help="Train swing (5-day) model instead of daily.")
+    _args = _p.parse_args()
+    if _args.swing:
+        train_swing_model()
+    else:
+        train_both()

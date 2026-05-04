@@ -85,15 +85,12 @@ MODE_CONFIG = {
     },
     "swing": {
         "title":        "Swing Trade Scanner",
-        "horizon_note": "20-day model used as proxy  |  target: 1-2 week stock holds",
+        "horizon_note": "5-day model  |  target: 1-2 week stock holds",
         "up_action":    "consider buying stock / short-dated call",
         "dn_action":    "consider shorting / short-dated put",
-        "ret_header":   "~1wk est",
-        "ret_scale":    0.40,   # rough: 1-week ≈ 40% of a 20-day return
-        "footer": (
-            "Est 1-wk return = 40% of the 20-day model estimate (rough approximation).\n"
-            "  For best swing results retrain with DEFAULT_HORIZON=5 in src/constants.py."
-        ),
+        "ret_header":   "Exp 5d",
+        "ret_scale":    1.0,
+        "footer":       "5-day forward return estimate. Check liquidity before entering.",
     },
 }
 
@@ -134,9 +131,11 @@ def run(tickers: list[str], mode: str = "leaps") -> pd.DataFrame:
     print(f"  {cfg['title']}  —  {today}")
     print(f"{'=' * 68}\n")
 
+    clf_pattern = "*_xgb_clf3_5d.pkl" if mode == "swing" else "*_xgb_clf3.pkl"
+    reg_pattern = "*_xgb_reg_5d.pkl"  if mode == "swing" else "*_xgb_reg.pkl"
     try:
-        clf_artifact, clf_name = _load_latest("*_xgb_clf3.pkl")
-        reg_artifact, reg_name = _load_latest("*_xgb_reg.pkl")
+        clf_artifact, clf_name = _load_latest(clf_pattern)
+        reg_artifact, reg_name = _load_latest(reg_pattern)
     except FileNotFoundError as e:
         sys.exit(str(e))
 
