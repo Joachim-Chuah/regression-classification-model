@@ -3,7 +3,7 @@
 Daily signal scanner — LEAPS and swing trade modes.
 
 Loads the latest trained classifier + regressor, fetches fresh end-of-day
-data from yfinance, and prints a ranked signal table for your watchlist.
+data from yfinance, and prints a ranked signal table + actionable calls.
 
 Usage
 -----
@@ -15,14 +15,10 @@ Usage
     python predict.py --mode swing
     python predict.py --mode swing AAPL NVDA MSFT
 
-Threshold guide (backtested precision on 2024 test set):
-    ★★  P(up) ≥ 0.70  →  83% historical precision  (rare, high conviction)
-    ★   P(up) ≥ 0.60  →  76% historical precision  (recommended entry bar)
-        P(up) ≥ 0.50  →  57% historical precision  (directional lean only)
-
-Model was trained on 20-day forward returns. In swing mode the same signal
-is used — direction is valid, but the magnitude estimate is for 20 days.
-For a 1-week hold you will typically capture 30-50% of the 20d estimate.
+Threshold guide (v1.3.0 Optuna-tuned, backtested on 2024 test set):
+    P(up) ≥ 0.65  →  69.6% precision  92 calls/yr  ← recommended entry bar
+    P(up) ≥ 0.60  →  58.3% precision  254 calls/yr  (higher volume, lower bar)
+    P(up) ≥ 0.50  →  55.8% precision  (directional lean only)
 
 Always check IV rank before entering options. Model does not price volatility.
 """
@@ -46,12 +42,28 @@ from src.features import compute_features
 # Config
 # ---------------------------------------------------------------------------
 
+CALL_THRESHOLD = 0.65   # P≥ this → actionable BUY / SELL call
+
 DEFAULT_WATCHLIST = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "META",
-    "NVDA", "TSLA", "AMD",
-    "JPM", "GS", "BAC",
-    "JNJ", "UNH", "LLY",
-    "XOM", "CVX",
+    # Mega-cap tech
+    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA",
+    # Semiconductors
+    "AMD", "AVGO", "QCOM", "MU", "INTC",
+    # Consumer discretionary
+    "TSLA", "NKE", "MCD", "SBUX", "HD",
+    # Consumer staples
+    "WMT", "PG", "KO", "PEP",
+    # Financials
+    "JPM", "GS", "BAC", "V", "MA",
+    # Healthcare
+    "JNJ", "UNH", "LLY", "ABBV", "MRK",
+    # Energy
+    "XOM", "CVX", "SLB",
+    # Communication / media
+    "NFLX", "DIS",
+    # Industrials
+    "CAT", "HON",
+    # Broad market
     "SPY", "QQQ",
 ]
 
@@ -59,13 +71,20 @@ DEFAULT_WATCHLIST = [
 # will not get a sector-relative-strength feature (XGBoost handles NaN natively).
 SECTOR_MAP = {
     **TICKER_SECTOR_ETF,
-    "NVDA": "XLK", "AMD":  "XLK", "TSLA": "XLK",
-    "CRM":  "XLK", "NFLX": "XLK", "INTC": "XLK",
+    # Tech / semis
+    "NVDA": "XLK", "AMD": "XLK", "AVGO": "XLK", "QCOM": "XLK",
+    "MU":   "XLK", "INTC": "XLK", "TSLA": "XLK",
+    "CRM":  "XLK", "NFLX": "XLK",
+    # Financials
     "BAC":  "XLF", "WFC":  "XLF", "MS":   "XLF",
     "V":    "XLF", "MA":   "XLF",
-    "PFE":  "XLV", "ABBV": "XLV", "MRK":  "XLV",
-    "BMY":  "XLV", "LLY":  "XLV",
+    # Healthcare
+    "LLY":  "XLV", "ABBV": "XLV", "MRK":  "XLV",
+    "PFE":  "XLV", "AMGN": "XLV",
+    # Energy
     "SLB":  "XLE", "EOG":  "XLE",
+    # Consumer discretionary (no dedicated sector ETF pulled — NaN OK)
+    # Consumer staples (same)
 }
 
 TRAINING_TICKERS = set(DEFAULT_TICKERS)
@@ -77,20 +96,22 @@ MODE_CONFIG = {
     "leaps": {
         "title":        "LEAPS Signal Scanner",
         "horizon_note": "20-day model  |  target: 2-6 month options",
-        "up_action":    "consider LEAPS calls",
-        "dn_action":    "consider LEAPS puts",
+        "up_action":    "LEAPS call",
+        "dn_action":    "LEAPS put",
         "ret_header":   "Exp 20d",
         "ret_scale":    1.0,
         "footer":       "Check IV rank before entering. Model does not price volatility.",
+        "precision_note": "P≥0.65 → ~70% precision (2024 backtest)",
     },
     "swing": {
         "title":        "Swing Trade Scanner",
         "horizon_note": "5-day model  |  target: 1-2 week stock holds",
-        "up_action":    "consider buying stock / short-dated call",
-        "dn_action":    "consider shorting / short-dated put",
+        "up_action":    "buy stock / short-dated call",
+        "dn_action":    "short / short-dated put",
         "ret_header":   "Exp 5d",
         "ret_scale":    1.0,
         "footer":       "5-day forward return estimate. Check liquidity before entering.",
+        "precision_note": "P≥0.65 → ~72% precision (2024 backtest)",
     },
 }
 
@@ -111,10 +132,10 @@ def _load_latest(pattern: str) -> tuple[dict, str]:
 
 def _signal_label(p_up: float, p_down: float) -> str:
     if p_up >= 0.70:   return "★★ STRONG UP  "
-    if p_up >= 0.60:   return "★  HIGH UP    "
+    if p_up >= 0.65:   return "★  UP         "
     if p_up >= 0.50:   return "   up         "
     if p_down >= 0.70: return "▼▼ STRONG DOWN"
-    if p_down >= 0.60: return "▼  HIGH DOWN  "
+    if p_down >= 0.65: return "▼  DOWN       "
     if p_down >= 0.50: return "   down       "
     return               "   neutral    "
 
@@ -149,7 +170,7 @@ def run(tickers: list[str], mode: str = "leaps") -> pd.DataFrame:
     print(f"  Classifier  v{clf_version}  ({clf_name})")
     print(f"  Regressor   v{reg_version}  ({reg_name})")
     print(f"  Mode        {cfg['horizon_note']}")
-    print(f"  Tickers     {', '.join(tickers)}\n")
+    print(f"  Tickers     {len(tickers)} stocks\n")
 
     print("  Pulling macro data (VIX, yields, SPY, sector ETFs)...")
     try:
@@ -208,43 +229,48 @@ def run(tickers: list[str], mode: str = "leaps") -> pd.DataFrame:
     results = pd.DataFrame(rows).sort_values("p_up", ascending=False).reset_index(drop=True)
 
     # -----------------------------------------------------------------------
-    # Signal table
+    # Full signal table
     # -----------------------------------------------------------------------
     ret_h = cfg["ret_header"]
-    print(f"\n  {'#':<3}  {'Ticker':<7}  {'P(up)':>6}  {'P(dn)':>6}  {'Signal':<16}  {ret_h:>9}  {'As of':<12}  Note")
-    print("  " + "-" * 84)
+    print(f"\n  {'#':<3}  {'Ticker':<7}  {'P(up)':>6}  {'P(dn)':>6}  {'Signal':<16}  {ret_h:>8}  {'As of'}")
+    print("  " + "-" * 70)
 
     for i, row in results.iterrows():
-        note = "" if row["trained"] else "⚠ not in training set"
+        note = "  ⚠" if not row["trained"] else ""
         print(
             f"  {i+1:<3}  {row['ticker']:<7}  {row['p_up']:>5.1%}  {row['p_down']:>6.1%}"
-            f"  {row['signal']:<16}  {row['exp_ret']:>+8.1%}  {row['as_of']:<12}  {note}"
+            f"  {row['signal']:<16}  {row['exp_ret']:>+7.1%}  {row['as_of']}{note}"
         )
 
     # -----------------------------------------------------------------------
-    # High-conviction summary
+    # TODAY'S CALLS — actionable signals at CALL_THRESHOLD
     # -----------------------------------------------------------------------
-    high       = results[results["p_up"]   >= 0.60]
-    strong_dn  = results[results["p_down"] >= 0.60]
+    buys  = results[results["p_up"]   >= CALL_THRESHOLD].copy()
+    sells = results[results["p_down"] >= CALL_THRESHOLD].copy()
 
-    print(f"\n  {'─' * 68}")
+    div = "─" * 52
+    print(f"\n  {div}")
+    print(f"  TODAY'S CALLS  (P≥{CALL_THRESHOLD:.0%}  ·  {cfg['precision_note']})")
+    print(f"  {div}")
 
-    if not high.empty:
-        print(f"\n  HIGH-CONVICTION UP (P≥0.60) — {cfg['up_action']}:")
-        for _, row in high.iterrows():
-            flag = "" if row["trained"] else "  ⚠ extrapolating"
-            print(f"    {row['ticker']}:  P(up)={row['p_up']:.1%}  {ret_h}={row['exp_ret']:+.1%}{flag}")
+    if buys.empty and sells.empty:
+        print(f"  No calls today — no ticker reached P≥{CALL_THRESHOLD:.0%}.")
+        print(f"  Strongest up:  {results.iloc[0]['ticker']}  P(up)={results.iloc[0]['p_up']:.1%}")
+        if len(results) > 0:
+            top_dn = results.sort_values("p_down", ascending=False).iloc[0]
+            print(f"  Strongest dn:  {top_dn['ticker']}  P(dn)={top_dn['p_down']:.1%}")
     else:
-        print("\n  No high-conviction UP calls today (P(up) < 0.60 for all tickers).")
+        for _, row in buys.iterrows():
+            flag = "  ⚠ not in training set" if not row["trained"] else ""
+            print(f"  BUY   {row['ticker']:<6}  P(up)={row['p_up']:.0%}  {ret_h}={row['exp_ret']:+.1%}  →  {cfg['up_action']}{flag}")
+        for _, row in sells.iterrows():
+            flag = "  ⚠ not in training set" if not row["trained"] else ""
+            print(f"  SELL  {row['ticker']:<6}  P(dn)={row['p_down']:.0%}  {ret_h}={row['exp_ret']:+.1%}  →  {cfg['dn_action']}{flag}")
+        n = len(buys) + len(sells)
+        print(f"  {div}")
+        print(f"  {n} call{'s' if n != 1 else ''} today")
 
-    if not strong_dn.empty:
-        print(f"\n  HIGH-CONVICTION DOWN (P≥0.60) — {cfg['dn_action']}:")
-        for _, row in strong_dn.iterrows():
-            flag = "" if row["trained"] else "  ⚠ extrapolating"
-            print(f"    {row['ticker']}:  P(dn)={row['p_down']:.1%}  {ret_h}={row['exp_ret']:+.1%}{flag}")
-
-    print(f"\n  ★★ P≥0.70 · ★ P≥0.60 · plain = weaker edge · ▼ = down signal")
-    print(f"  {cfg['footer']}\n")
+    print(f"\n  {cfg['footer']}\n")
 
     return results
 
@@ -261,7 +287,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "tickers",
         nargs="*",
-        help="Tickers to scan (default: built-in watchlist of 18 stocks)",
+        help="Tickers to scan (default: built-in watchlist of 40 stocks)",
     )
     parser.add_argument(
         "--mode",
