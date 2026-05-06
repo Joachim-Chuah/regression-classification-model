@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.data import RAW_DIR, pull
+from src.data import RAW_DIR, pull, pull_fred
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +82,61 @@ def test_cache_written_for_past_date(tmp_path, monkeypatch):
         f"Cache file should exist for past date (end={yesterday}), "
         "but it was not written. Historical data should be cached."
     )
+
+
+# ---------------------------------------------------------------------------
+# pull_fred unit tests — no network required
+# ---------------------------------------------------------------------------
+
+def test_pull_fred_no_cache_written_for_today(tmp_path, monkeypatch):
+    """pull_fred() with end=today must not write a parquet file."""
+    monkeypatch.setattr("src.data.RAW_DIR", tmp_path)
+
+    today = date.today().isoformat()
+    monkeypatch.setenv("FRED_API_KEY", "fake_key")
+
+    fake_series = pd.Series(
+        [5.33, 5.33],
+        index=pd.DatetimeIndex([pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")], name="date"),
+        name="DFF",
+    )
+
+    from unittest.mock import MagicMock, patch
+    with patch("src.data.Fred") as mock_fred_cls:
+        mock_fred_cls.return_value.get_series.return_value = fake_series
+        pull_fred("DFF", start="2024-01-01", end=today)
+
+    cache_file = tmp_path / f"fred_DFF_2024-01-01_{today}.parquet"
+    assert not cache_file.exists()
+
+
+def test_pull_fred_cache_written_for_past_date(tmp_path, monkeypatch):
+    """pull_fred() with end < today MUST write a parquet cache file."""
+    monkeypatch.setattr("src.data.RAW_DIR", tmp_path)
+
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    monkeypatch.setenv("FRED_API_KEY", "fake_key")
+
+    fake_series = pd.Series(
+        [5.33],
+        index=pd.DatetimeIndex([pd.Timestamp(yesterday)], name="date"),
+        name="DFF",
+    )
+
+    from unittest.mock import patch
+    with patch("src.data.Fred") as mock_fred_cls:
+        mock_fred_cls.return_value.get_series.return_value = fake_series
+        pull_fred("DFF", start="2024-01-01", end=yesterday)
+
+    cache_file = tmp_path / f"fred_DFF_2024-01-01_{yesterday}.parquet"
+    assert cache_file.exists()
+
+
+def test_pull_fred_raises_without_api_key(monkeypatch):
+    """pull_fred() must raise RuntimeError when FRED_API_KEY is not set."""
+    monkeypatch.delenv("FRED_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="FRED_API_KEY"):
+        pull_fred("DFF", start="2024-01-01", end="2024-01-31")
 
 
 # ---------------------------------------------------------------------------

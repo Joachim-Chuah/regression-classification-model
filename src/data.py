@@ -1,7 +1,10 @@
+import os
+
 import numpy as np
 import pandas as pd
 import yfinance as yf
 from datetime import date
+from fredapi import Fred
 from pathlib import Path
 
 RAW_DIR = Path(__file__).parent.parent / "data" / "raw"
@@ -38,6 +41,42 @@ def pull(ticker: str, start: str, end: str) -> pd.DataFrame:
         RAW_DIR.mkdir(parents=True, exist_ok=True)
         df.to_parquet(cache_path)
     return df
+
+
+def pull_fred(series_id: str, start: str, end: str) -> pd.Series:
+    """Pull a FRED series with parquet caching (same policy as pull()).
+
+    Requires FRED_API_KEY env var. Free key at:
+    https://fred.stlouisfed.org/docs/api/api_key.html
+    then: export FRED_API_KEY=your_key_here
+    """
+    today = date.today().isoformat()
+    cache_path = RAW_DIR / f"fred_{series_id}_{start}_{end}.parquet"
+    use_cache = end < today
+
+    if use_cache and cache_path.exists():
+        return pd.read_parquet(cache_path)["value"]
+
+    api_key = os.environ.get("FRED_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "FRED_API_KEY not set. Get a free key at "
+            "https://fred.stlouisfed.org/docs/api/api_key.html "
+            "then: export FRED_API_KEY=your_key_here"
+        )
+
+    fred = Fred(api_key=api_key)
+    series = fred.get_series(series_id, observation_start=start, observation_end=end)
+    series.name = series_id
+    series.index.name = "date"
+    if series.index.tz is not None:
+        series.index = series.index.tz_localize(None)
+
+    if use_cache:
+        RAW_DIR.mkdir(parents=True, exist_ok=True)
+        series.to_frame("value").to_parquet(cache_path)
+
+    return series
 
 
 def _zscore(series: pd.Series, window: int = 252) -> pd.Series:
@@ -94,6 +133,38 @@ def pull_macro(start: str, end: str) -> pd.DataFrame:
         "yield_10y_zscore_252d", "yield_change_20d", "yield_curve_zscore_252d",
         "XLK_return_20d", "XLF_return_20d", "XLV_return_20d", "XLE_return_20d",
     ]
+
+    fred_key = os.environ.get("FRED_API_KEY")
+    if fred_key:
+        # Fed funds effective rate (daily). FRED publishes with ~1-day lag → shift(1).
+        dff = pull_fred("DFF", start, end).shift(1)
+        dff_d = dff.reindex(macro.index, method="ffill")
+        macro["fedfunds"]          = dff_d
+        macro["fedfunds_change_1y"] = dff_d.diff(252)
+
+        # CPI YoY (monthly). FRED timestamps to the reference month start, but the
+        # release arrives ~2-3 weeks later → shift 1 month before forward-filling.
+        cpi = pull_fred("CPIAUCSL", start, end)
+        cpi_m   = cpi.resample("MS").last()
+        cpi_yoy = cpi_m.pct_change(12)
+        macro["cpi_yoy"]      = cpi_yoy.shift(1).reindex(macro.index, method="ffill")
+        macro["cpi_momentum"] = cpi_yoy.diff(3).shift(1).reindex(macro.index, method="ffill")
+
+        # Unemployment rate (monthly, same release-lag logic as CPI).
+        unrate = pull_fred("UNRATE", start, end)
+        unrate_m = unrate.resample("MS").last()
+        macro["unemployment"]          = unrate_m.shift(1).reindex(macro.index, method="ffill")
+        macro["unemployment_change_1y"] = unrate_m.diff(12).shift(1).reindex(macro.index, method="ffill")
+
+        keep += ["fedfunds", "fedfunds_change_1y", "cpi_yoy", "cpi_momentum",
+                 "unemployment", "unemployment_change_1y"]
+    else:
+        print(
+            "  [data] FRED_API_KEY not set — skipping fed funds / CPI / unemployment features.\n"
+            "         Get a free key: https://fred.stlouisfed.org/docs/api/api_key.html\n"
+            "         Then: export FRED_API_KEY=your_key_here"
+        )
+
     return macro[keep]
 
 

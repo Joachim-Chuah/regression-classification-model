@@ -116,6 +116,15 @@ def compute_features(
                 close.pct_change(20) - m[f"{sector_etf}_return_20d"]
             )
 
+        # FRED macro features (only present when FRED_API_KEY is set)
+        for col in [
+            "fedfunds", "fedfunds_change_1y",
+            "cpi_yoy", "cpi_momentum",
+            "unemployment", "unemployment_change_1y",
+        ]:
+            if col in m.columns:
+                features[col] = m[col]
+
     if earnings_dates is not None and len(earnings_dates) > 0:
         sorted_ed = np.sort(np.asarray(earnings_dates, dtype="datetime64[D]"))
         idx_days  = df.index.values.astype("datetime64[D]")
