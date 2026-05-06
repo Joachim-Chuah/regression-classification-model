@@ -6,6 +6,7 @@ from sklearn.model_selection import TimeSeriesSplit
 from xgboost import XGBClassifier, XGBRegressor
 
 from src.constants import (
+    DATA_END, DATA_START,
     DEFAULT_HORIZON, DEFAULT_TICKERS, NEUTRAL_THRESHOLD,
     RANDOM_STATE, SWING_HORIZON, SWING_NEUTRAL_THRESHOLD,
     TICKER_SECTOR_ETF, TRAIN_END, VAL_END,
@@ -112,8 +113,8 @@ def train_classifier_3class(
     print(f"=== 3-Class Classifier ({model_name}) — Loading data ===")
     X, y, fwd_ret = _build(
         tickers,
-        "2015-01-01",
-        "2024-12-31",
+        DATA_START,
+        DATA_END,
         target="3class",
         horizon=horizon,
         label_mode=label_mode,
@@ -197,7 +198,7 @@ def train_regressor(
     model_name: str = "xgb_reg",
 ) -> XGBRegressor:
     print(f"\n=== Regressor ({model_name}) — Loading data ===")
-    X, y, _ = _build(tickers, "2015-01-01", "2024-12-31", target="return", horizon=horizon)
+    X, y, _ = _build(tickers, DATA_START, DATA_END, target="return", horizon=horizon)
     print(f"  Total: {len(X)} rows across {len(tickers)} tickers\n")
 
     X_train, _, X_test = time_split(X, TRAIN_END, VAL_END)

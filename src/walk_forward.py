@@ -19,6 +19,7 @@ from sklearn.metrics import accuracy_score, brier_score_loss, precision_score, r
 from xgboost import XGBClassifier
 
 from src.constants import (
+    DATA_END, DATA_START,
     DEFAULT_HORIZON, DEFAULT_TICKERS, NEUTRAL_THRESHOLD,
     RANDOM_STATE, TICKER_SECTOR_ETF,
 )
@@ -31,6 +32,7 @@ from src.models import CalibratedXGB3Class
 _REGIME_LABELS = {
     2020: "COVID crash",
     2021: "low-rate bull",
+    2025: "post-rate-cut",
     2022: "bear/rate shock",
     2023: "recovery",
     2024: "bull",
@@ -85,7 +87,7 @@ def walk_forward_cv(
     If export_csv_path is provided, writes the summary DataFrame to CSV.
     """
     if test_years is None:
-        test_years = [2020, 2021, 2022, 2023, 2024]
+        test_years = [2020, 2021, 2022, 2023, 2024, 2025]
 
     print("=== Walk-Forward Cross-Validation ===")
     print(f"  Tickers: {len(tickers)}  |  Horizon: {horizon}d  |  Years: {test_years}")
@@ -98,12 +100,11 @@ def walk_forward_cv(
     w_note = f"clip abs(return) to [{weight_clip[0]:.2%}, {weight_clip[1]:.2%}]" if weight_clip else "none"
     print(f"  Sample weights: {w_note}\n")
 
-    # Build the full 2015-2024 dataset once
     print("  Building full dataset (using parquet cache where available)...")
-    macro = pull_macro("2015-01-01", "2024-12-31")
+    macro = pull_macro(DATA_START, DATA_END)
     frames = []
     for ticker in tickers:
-        df = pull(ticker, start="2015-01-01", end="2024-12-31")
+        df = pull(ticker, start=DATA_START, end=DATA_END)
         sector_etf = TICKER_SECTOR_ETF.get(ticker)
         ed = pull_earnings_dates(ticker)
         X_ticker = compute_features(df, macro=macro, sector_etf=sector_etf, earnings_dates=ed)

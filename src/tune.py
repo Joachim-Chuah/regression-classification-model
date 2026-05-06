@@ -30,6 +30,7 @@ from sklearn.metrics import log_loss
 from xgboost import XGBClassifier
 
 from src.constants import (
+    DATA_END, DATA_START,
     DEFAULT_HORIZON, DEFAULT_TICKERS, NEUTRAL_THRESHOLD,
     RANDOM_STATE, SWING_HORIZON, SWING_NEUTRAL_THRESHOLD,
     TRAIN_END, VAL_END,
@@ -114,8 +115,8 @@ def tune(
     print("  Building dataset...")
     X, y, _ = _build(
         DEFAULT_TICKERS,
-        "2015-01-01",
-        "2024-12-31",
+        DATA_START,
+        DATA_END,
         target="3class",
         horizon=horizon,
         neutral_threshold=neutral_threshold,
