@@ -50,11 +50,9 @@ def pull_fred(series_id: str, start: str, end: str) -> pd.Series:
     https://fred.stlouisfed.org/docs/api/api_key.html
     then: export FRED_API_KEY=your_key_here
     """
-    today = date.today().isoformat()
     cache_path = RAW_DIR / f"fred_{series_id}_{start}_{end}.parquet"
-    use_cache = end < today
 
-    if use_cache and cache_path.exists():
+    if cache_path.exists():
         return pd.read_parquet(cache_path)["value"]
 
     api_key = os.environ.get("FRED_API_KEY")
@@ -72,9 +70,8 @@ def pull_fred(series_id: str, start: str, end: str) -> pd.Series:
     if series.index.tz is not None:
         series.index = series.index.tz_localize(None)
 
-    if use_cache:
-        RAW_DIR.mkdir(parents=True, exist_ok=True)
-        series.to_frame("value").to_parquet(cache_path)
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    series.to_frame("value").to_parquet(cache_path)
 
     return series
 

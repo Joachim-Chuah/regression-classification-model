@@ -88,8 +88,8 @@ def test_cache_written_for_past_date(tmp_path, monkeypatch):
 # pull_fred unit tests — no network required
 # ---------------------------------------------------------------------------
 
-def test_pull_fred_no_cache_written_for_today(tmp_path, monkeypatch):
-    """pull_fred() with end=today must not write a parquet file."""
+def test_pull_fred_cache_written_for_today(tmp_path, monkeypatch):
+    """pull_fred() always writes a parquet cache — FRED data is always lagged so caching is safe."""
     monkeypatch.setattr("src.data.RAW_DIR", tmp_path)
 
     today = date.today().isoformat()
@@ -107,7 +107,7 @@ def test_pull_fred_no_cache_written_for_today(tmp_path, monkeypatch):
         pull_fred("DFF", start="2024-01-01", end=today)
 
     cache_file = tmp_path / f"fred_DFF_2024-01-01_{today}.parquet"
-    assert not cache_file.exists()
+    assert cache_file.exists()
 
 
 def test_pull_fred_cache_written_for_past_date(tmp_path, monkeypatch):
