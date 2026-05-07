@@ -1,4 +1,5 @@
 import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -64,7 +65,16 @@ def pull_fred(series_id: str, start: str, end: str) -> pd.Series:
         )
 
     fred = Fred(api_key=api_key)
-    series = fred.get_series(series_id, observation_start=start, observation_end=end)
+    for attempt in range(4):
+        try:
+            series = fred.get_series(series_id, observation_start=start, observation_end=end)
+            break
+        except Exception as e:
+            if attempt == 3:
+                raise
+            wait = 5 * (2 ** attempt)  # 5s, 10s, 20s
+            print(f"  [data] FRED {series_id} attempt {attempt+1} failed ({e}), retrying in {wait}s...")
+            time.sleep(wait)
     series.name = series_id
     series.index.name = "date"
     if series.index.tz is not None:

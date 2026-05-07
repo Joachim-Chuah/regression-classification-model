@@ -3,16 +3,20 @@ from datetime import date
 RANDOM_STATE = 42
 
 DEFAULT_TICKERS = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "META",  # mega-cap tech
-    "JPM", "GS",                                # financials
+    "AAPL", "MSFT", "GOOGL", "AMZN", "META",  # Mag7 (NVDA/TSLA excluded — see below)
+    "JPM", "GS", "MA",                          # financials
     "JNJ", "UNH",                               # healthcare
     "XOM", "CVX",                               # energy
+    "DIS", "NFLX",                              # communication services
+    "HD", "NKE",                                # consumer discretionary
     "SPY", "QQQ",                               # broad market ETFs
+    # NVDA excluded: AI-boom regime creates train/test distribution shift
+    # TSLA excluded: news-driven; structured features have near-zero predictive power
 ]
 
 TICKER_SECTOR_ETF = {
     "AAPL": "XLK", "MSFT": "XLK", "GOOGL": "XLK", "AMZN": "XLK", "META": "XLK",
-    "JPM": "XLF", "GS": "XLF",
+    "JPM": "XLF", "GS": "XLF", "MA": "XLF",
     "JNJ": "XLV", "UNH": "XLV",
     "XOM": "XLE", "CVX": "XLE",
     "SPY": "SPY",  "QQQ": "QQQ",

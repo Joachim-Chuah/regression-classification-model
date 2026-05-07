@@ -102,12 +102,12 @@ def tune(
         horizon           = SWING_HORIZON
         neutral_threshold = SWING_NEUTRAL_THRESHOLD
         model_name        = "xgb_clf3_5d"
-        clf_version       = "1.1.0"
+        clf_version       = "1.2.0"
     else:
         horizon           = DEFAULT_HORIZON
         neutral_threshold = NEUTRAL_THRESHOLD
         model_name        = "xgb_clf3"
-        clf_version       = "1.3.0"
+        clf_version       = "1.4.0"
 
     print(f"=== Optuna Tuning — {model} model (horizon={horizon}d, ±{neutral_threshold:.0%} neutral) ===")
     print(f"  Trials: {n_trials}\n")

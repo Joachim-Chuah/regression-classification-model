@@ -15,7 +15,7 @@ Usage
     python predict.py --mode swing
     python predict.py --mode swing AAPL NVDA MSFT
 
-Threshold guide (v1.3.0 Optuna-tuned, backtested on 2024 test set):
+Threshold guide (v1.4.0 Optuna-tuned on 19 tickers, backtested on 2024 test set):
     P(up) ≥ 0.65  →  69.6% precision  92 calls/yr  ← recommended entry bar
     P(up) ≥ 0.60  →  58.3% precision  254 calls/yr  (higher volume, lower bar)
     P(up) ≥ 0.50  →  55.8% precision  (directional lean only)
