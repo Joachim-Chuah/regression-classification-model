@@ -116,11 +116,14 @@ def compute_features(
                 close.pct_change(20) - m[f"{sector_etf}_return_20d"]
             )
 
-        # FRED macro features (only present when FRED_API_KEY is set)
+        # Pass-through macro columns (breadth + FRED, present when available)
         for col in [
+            "iwm_vs_spy_20d", "xlp_vs_spy_20d",
             "fedfunds", "fedfunds_change_1y",
             "cpi_yoy", "cpi_momentum",
             "unemployment", "unemployment_change_1y",
+            "hy_spread", "hy_spread_change_20d",
+            "nfci",
         ]:
             if col in m.columns:
                 features[col] = m[col]

@@ -124,11 +124,18 @@ def pull_macro(start: str, end: str) -> pd.DataFrame:
         etf_close = pull(etf, start, end)["close"]
         macro[f"{etf}_return_20d"] = etf_close.pct_change(20).reindex(macro.index).ffill()
 
+    # Market breadth proxies (yfinance, no API key required)
+    iwm_ret = pull("IWM", start, end)["close"].pct_change(20).reindex(macro.index).ffill()
+    xlp_ret = pull("XLP", start, end)["close"].pct_change(20).reindex(macro.index).ffill()
+    macro["iwm_vs_spy_20d"] = iwm_ret - macro["spy_return_20d"]   # small cap breadth
+    macro["xlp_vs_spy_20d"] = xlp_ret - macro["spy_return_20d"]   # defensive rotation
+
     keep = [
         "vix_zscore_252d", "vix_change_5d",
         "spy_return_20d", "spy_vs_200ma",
         "yield_10y_zscore_252d", "yield_change_20d", "yield_curve_zscore_252d",
         "XLK_return_20d", "XLF_return_20d", "XLV_return_20d", "XLE_return_20d",
+        "iwm_vs_spy_20d", "xlp_vs_spy_20d",
     ]
 
     fred_key = os.environ.get("FRED_API_KEY")
@@ -136,7 +143,7 @@ def pull_macro(start: str, end: str) -> pd.DataFrame:
         # Fed funds effective rate (daily). FRED publishes with ~1-day lag → shift(1).
         dff = pull_fred("DFF", start, end).shift(1)
         dff_d = dff.reindex(macro.index, method="ffill")
-        macro["fedfunds"]          = dff_d
+        macro["fedfunds"]           = dff_d
         macro["fedfunds_change_1y"] = dff_d.diff(252)
 
         # CPI YoY (monthly). FRED timestamps to the reference month start, but the
@@ -150,14 +157,30 @@ def pull_macro(start: str, end: str) -> pd.DataFrame:
         # Unemployment rate (monthly, same release-lag logic as CPI).
         unrate = pull_fred("UNRATE", start, end)
         unrate_m = unrate.resample("MS").last()
-        macro["unemployment"]          = unrate_m.shift(1).reindex(macro.index, method="ffill")
+        macro["unemployment"]           = unrate_m.shift(1).reindex(macro.index, method="ffill")
         macro["unemployment_change_1y"] = unrate_m.diff(12).shift(1).reindex(macro.index, method="ffill")
 
-        keep += ["fedfunds", "fedfunds_change_1y", "cpi_yoy", "cpi_momentum",
-                 "unemployment", "unemployment_change_1y"]
+        # HY credit spread (daily). Widening = risk-off / financial stress.
+        hy = pull_fred("BAMLH0A0HYM2", start, end).shift(1)
+        hy_d = hy.reindex(macro.index, method="ffill")
+        macro["hy_spread"]           = hy_d
+        macro["hy_spread_change_20d"] = hy_d.diff(20)
+
+        # Chicago Fed National Financial Conditions Index (weekly).
+        # Positive = tighter-than-average conditions, negative = looser.
+        nfci = pull_fred("NFCI", start, end)
+        macro["nfci"] = nfci.shift(1).reindex(macro.index, method="ffill")
+
+        keep += [
+            "fedfunds", "fedfunds_change_1y",
+            "cpi_yoy", "cpi_momentum",
+            "unemployment", "unemployment_change_1y",
+            "hy_spread", "hy_spread_change_20d",
+            "nfci",
+        ]
     else:
         print(
-            "  [data] FRED_API_KEY not set — skipping fed funds / CPI / unemployment features.\n"
+            "  [data] FRED_API_KEY not set — skipping fed funds / CPI / unemployment / credit features.\n"
             "         Get a free key: https://fred.stlouisfed.org/docs/api/api_key.html\n"
             "         Then: export FRED_API_KEY=your_key_here"
         )

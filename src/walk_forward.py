@@ -261,9 +261,9 @@ if __name__ == "__main__":
     _p = _ap.ArgumentParser()
     _p.add_argument("--output", default="artifacts/metrics/experiments/walk_forward_summary.csv",
                     help="Path to write the CSV results.")
-    _p.add_argument("--no-calibrate", action="store_true",
-                    help="Skip per-fold isotonic calibration (use raw XGBoost probabilities).")
+    _p.add_argument("--calibrate", action="store_true",
+                    help="Use per-fold isotonic calibration (default: raw XGBoost probabilities).")
     _args = _p.parse_args()
-    results = walk_forward_cv(export_csv_path=_args.output, calibrate=not _args.no_calibrate)
+    results = walk_forward_cv(export_csv_path=_args.output, calibrate=_args.calibrate)
     print("\nFull results:")
     print(results.to_string(index=False))
