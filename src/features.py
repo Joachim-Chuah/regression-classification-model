@@ -116,13 +116,13 @@ def compute_features(
                 close.pct_change(20) - m[f"{sector_etf}_return_20d"]
             )
 
-        # Pass-through macro columns (breadth + FRED, present when available)
+        # Pass-through macro columns (breadth + credit + FRED, present when available)
         for col in [
             "iwm_vs_spy_20d", "xlp_vs_spy_20d",
+            "hyg_lqd_ratio", "hyg_lqd_change_20d",
             "fedfunds", "fedfunds_change_1y",
             "cpi_yoy", "cpi_momentum",
             "unemployment", "unemployment_change_1y",
-            "hy_spread", "hy_spread_change_20d",
             "nfci",
         ]:
             if col in m.columns:

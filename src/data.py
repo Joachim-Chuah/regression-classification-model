@@ -130,12 +130,22 @@ def pull_macro(start: str, end: str) -> pd.DataFrame:
     macro["iwm_vs_spy_20d"] = iwm_ret - macro["spy_return_20d"]   # small cap breadth
     macro["xlp_vs_spy_20d"] = xlp_ret - macro["spy_return_20d"]   # defensive rotation
 
+    # Credit stress proxy: HYG/LQD ratio (high-yield vs investment-grade).
+    # HYG launched Apr 2007, LQD launched Jul 2002 — NaN before those dates is fine,
+    # the early 2000s still train on the 15 other macro features.
+    hyg_close = pull("HYG", start, end)["close"]
+    lqd_close = pull("LQD", start, end)["close"]
+    hyg_lqd   = (hyg_close / lqd_close).reindex(macro.index).ffill()
+    macro["hyg_lqd_ratio"]       = hyg_lqd
+    macro["hyg_lqd_change_20d"]  = hyg_lqd.pct_change(20)
+
     keep = [
         "vix_zscore_252d", "vix_change_5d",
         "spy_return_20d", "spy_vs_200ma",
         "yield_10y_zscore_252d", "yield_change_20d", "yield_curve_zscore_252d",
         "XLK_return_20d", "XLF_return_20d", "XLV_return_20d", "XLE_return_20d",
         "iwm_vs_spy_20d", "xlp_vs_spy_20d",
+        "hyg_lqd_ratio", "hyg_lqd_change_20d",
     ]
 
     fred_key = os.environ.get("FRED_API_KEY")
@@ -160,12 +170,6 @@ def pull_macro(start: str, end: str) -> pd.DataFrame:
         macro["unemployment"]           = unrate_m.shift(1).reindex(macro.index, method="ffill")
         macro["unemployment_change_1y"] = unrate_m.diff(12).shift(1).reindex(macro.index, method="ffill")
 
-        # HY credit spread (daily). Widening = risk-off / financial stress.
-        hy = pull_fred("BAMLH0A0HYM2", start, end).shift(1)
-        hy_d = hy.reindex(macro.index, method="ffill")
-        macro["hy_spread"]           = hy_d
-        macro["hy_spread_change_20d"] = hy_d.diff(20)
-
         # Chicago Fed National Financial Conditions Index (weekly).
         # Positive = tighter-than-average conditions, negative = looser.
         nfci = pull_fred("NFCI", start, end)
@@ -175,12 +179,11 @@ def pull_macro(start: str, end: str) -> pd.DataFrame:
             "fedfunds", "fedfunds_change_1y",
             "cpi_yoy", "cpi_momentum",
             "unemployment", "unemployment_change_1y",
-            "hy_spread", "hy_spread_change_20d",
             "nfci",
         ]
     else:
         print(
-            "  [data] FRED_API_KEY not set — skipping fed funds / CPI / unemployment / credit features.\n"
+            "  [data] FRED_API_KEY not set — skipping fed funds / CPI / unemployment features.\n"
             "         Get a free key: https://fred.stlouisfed.org/docs/api/api_key.html\n"
             "         Then: export FRED_API_KEY=your_key_here"
         )
