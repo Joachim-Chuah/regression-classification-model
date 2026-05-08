@@ -28,6 +28,9 @@ NEUTRAL_THRESHOLD = 0.02    # ±2% — returns inside this band are labeled "neu
 SWING_HORIZON = 5           # trading days forward for swing model
 SWING_NEUTRAL_THRESHOLD = 0.01  # ±1% neutral band for 5-day returns
 
+DAILY_HORIZON = 3           # trading days forward for daily model
+DAILY_NEUTRAL_THRESHOLD = 0.005  # ±0.5% neutral band for 3-day returns
+
 DATA_START = "2000-01-01"
 DATA_END   = date.today().isoformat()   # always pull through today
 

@@ -31,6 +31,7 @@ from xgboost import XGBClassifier
 
 from src.constants import (
     DATA_END, DATA_START,
+    DAILY_HORIZON, DAILY_NEUTRAL_THRESHOLD,
     DEFAULT_HORIZON, DEFAULT_TICKERS, NEUTRAL_THRESHOLD,
     RANDOM_STATE, SWING_HORIZON, SWING_NEUTRAL_THRESHOLD,
     TRAIN_END, VAL_END,
@@ -103,7 +104,12 @@ def tune(
         neutral_threshold = SWING_NEUTRAL_THRESHOLD
         model_name        = "xgb_clf3_5d"
         clf_version       = "1.2.0"
-    else:
+    elif model == "daily":
+        horizon           = DAILY_HORIZON
+        neutral_threshold = DAILY_NEUTRAL_THRESHOLD
+        model_name        = "xgb_clf3_3d"
+        clf_version       = "1.0.0"
+    else:  # leaps
         horizon           = DEFAULT_HORIZON
         neutral_threshold = NEUTRAL_THRESHOLD
         model_name        = "xgb_clf3"
@@ -170,8 +176,8 @@ def tune(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Optuna hyperparameter search for XGBoost classifier.")
-    parser.add_argument("--model", choices=["daily", "swing"], default="daily",
-                        help="Which model to tune: daily (20d) or swing (5d).")
+    parser.add_argument("--model", choices=["leaps", "swing", "daily"], default="leaps",
+                        help="leaps=20d (default) | swing=5d | daily=3d")
     parser.add_argument("--trials", type=int, default=50,
                         help="Number of Optuna trials (default: 50).")
     args = parser.parse_args()
