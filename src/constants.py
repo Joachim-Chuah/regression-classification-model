@@ -15,11 +15,50 @@ DEFAULT_TICKERS = [
 ]
 
 TICKER_SECTOR_ETF = {
+    # ── existing training tickers ───────────────────────────────────────────
     "AAPL": "XLK", "MSFT": "XLK", "GOOGL": "XLK", "AMZN": "XLK", "META": "XLK",
     "JPM": "XLF", "GS": "XLF", "MA": "XLF",
     "JNJ": "XLV", "UNH": "XLV",
     "XOM": "XLE", "CVX": "XLE",
     "SPY": "SPY",  "QQQ": "QQQ",
+
+    # ── Semiconductors / AI hardware (SOXX basket → XLK proxy) ─────────────
+    "NVDA": "XLK", "AMD": "XLK", "INTC": "XLK", "MU": "XLK", "ARM": "XLK",
+    "MRVL": "XLK", "AVGO": "XLK", "QCOM": "XLK", "TXN": "XLK",
+    "AMAT": "XLK", "LRCX": "XLK", "KLAC": "XLK", "ADI": "XLK",
+    "ASML": "XLK", "TSM": "XLK",
+
+    # ── Big Tech / AI infra / SaaS (XLK basket) ────────────────────────────
+    "ORCL": "XLK", "CRM": "XLK", "ADBE": "XLK", "CSCO": "XLK",
+    "DELL": "XLK", "HPE": "XLK",
+
+    # ── Cybersecurity (HACK basket → XLK proxy) ────────────────────────────
+    "CRWD": "XLK", "PANW": "XLK", "ZS": "XLK", "FTNT": "XLK",
+    "OKTA": "XLK", "S": "XLK", "CYBR": "XLK", "TENB": "XLK",
+    "NET": "XLK", "CHKP": "XLK",
+
+    # ── AI software / data (predict watchlist) ──────────────────────────────
+    "PLTR": "XLK", "NOW": "XLK", "SNOW": "XLK",
+
+    # ── Energy (XLE basket) ─────────────────────────────────────────────────
+    "COP": "XLE", "EOG": "XLE", "SLB": "XLE", "MPC": "XLE",
+    "PSX": "XLE", "VLO": "XLE", "HAL": "XLE", "OXY": "XLE",
+
+    # ── Healthcare (XLV basket) ─────────────────────────────────────────────
+    "LLY": "XLV", "ABBV": "XLV", "MRK": "XLV", "PFE": "XLV",
+    "BMY": "XLV", "TMO": "XLV", "DHR": "XLV", "CVS": "XLV",
+
+    # ── Biotech (XBI basket → XLV proxy, closest available) ────────────────
+    "MRNA": "XLV", "BIIB": "XLV", "REGN": "XLV", "VRTX": "XLV",
+    "GILD": "XLV", "ALNY": "XLV", "BMRN": "XLV",
+
+    # ── Financials (XLF basket) ─────────────────────────────────────────────
+    "WFC": "XLF", "BLK": "XLF", "SCHW": "XLF", "C": "XLF",
+    "AXP": "XLF", "V": "XLF", "BAC": "XLF", "MS": "XLF",
+    # Industrials/Defense/Clean Energy/EV/Consumer/Real Estate/Materials
+    # baskets intentionally omitted — their sector ETFs (XLI, ITA, ICLN,
+    # DRIV, XLY, XLRE, XLB) are not in SECTOR_ETFS so rel_strength_vs_sector
+    # would be None anyway. Add those ETFs to data.SECTOR_ETFS to unlock.
 }
 
 DEFAULT_HORIZON = 20        # trading days forward
