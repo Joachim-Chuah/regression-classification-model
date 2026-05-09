@@ -4,14 +4,17 @@ RANDOM_STATE = 42
 
 DEFAULT_TICKERS = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "META",  # Mag7 (NVDA/TSLA excluded — see below)
-    "JPM", "GS", "MA",                          # financials
-    "JNJ", "UNH",                               # healthcare
+    "JPM", "GS", "MA", "V",                    # financials
+    "JNJ", "UNH", "MRK", "ABBV",              # healthcare / pharma
     "XOM", "CVX",                               # energy
+    "AVGO", "PANW",                             # semis/infra + cybersecurity
     "DIS", "NFLX",                              # communication services
     "HD", "NKE",                                # consumer discretionary
     "SPY", "QQQ",                               # broad market ETFs
     # NVDA excluded: AI-boom regime creates train/test distribution shift
     # TSLA excluded: news-driven; structured features have near-zero predictive power
+    # LLY excluded: GLP-1 regime shift 2022-23 causes same distribution problem as NVDA
+    # CRWD excluded: IPO 2019, insufficient history pre-bull-market
 ]
 
 TICKER_SECTOR_ETF = {
