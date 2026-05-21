@@ -101,8 +101,11 @@ def compute_features(
 
         features["vix_zscore_252d"]       = m["vix_zscore_252d"]
         features["vix_change_5d"]         = m["vix_change_5d"]
+        features["vix_level"]             = m["vix_level"]
         features["spy_return_20d"]        = m["spy_return_20d"]
         features["spy_vs_200ma"]          = m["spy_vs_200ma"]
+        features["spy_return_52w"]        = m["spy_return_52w"]
+        features["spy_drawdown_52w"]      = m["spy_drawdown_52w"]
         features["yield_10y_zscore_252d"] = m["yield_10y_zscore_252d"]
         features["yield_change_20d"]          = m["yield_change_20d"]
         features["yield_curve_zscore_252d"]   = m["yield_curve_zscore_252d"]

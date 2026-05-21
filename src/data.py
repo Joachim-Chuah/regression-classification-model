@@ -125,6 +125,9 @@ def pull_macro(start: str, end: str) -> pd.DataFrame:
     macro["vix_change_5d"]          = macro["vix"].pct_change(5)
     macro["spy_return_20d"]         = macro["spy_close"].pct_change(20)
     macro["spy_vs_200ma"]           = macro["spy_close"] / macro["spy_close"].rolling(200).mean() - 1
+    macro["spy_return_52w"]         = macro["spy_close"].pct_change(252)
+    macro["spy_drawdown_52w"]       = macro["spy_close"] / macro["spy_close"].rolling(252).max() - 1
+    macro["vix_level"]              = macro["vix"]
     macro["yield_10y_zscore_252d"]  = _zscore(macro["yield_10y"])
     macro["yield_change_20d"]       = macro["yield_10y"].diff(20)
     raw_curve                        = macro["yield_10y"] - macro["yield_3m"]
@@ -150,8 +153,8 @@ def pull_macro(start: str, end: str) -> pd.DataFrame:
     macro["hyg_lqd_change_20d"]  = hyg_lqd.pct_change(20)
 
     keep = [
-        "vix_zscore_252d", "vix_change_5d",
-        "spy_return_20d", "spy_vs_200ma",
+        "vix_zscore_252d", "vix_change_5d", "vix_level",
+        "spy_return_20d", "spy_vs_200ma", "spy_return_52w", "spy_drawdown_52w",
         "yield_10y_zscore_252d", "yield_change_20d", "yield_curve_zscore_252d",
         "XLK_return_20d", "XLF_return_20d", "XLV_return_20d", "XLE_return_20d",
         "iwm_vs_spy_20d", "xlp_vs_spy_20d",
