@@ -93,7 +93,10 @@ def _build(
             y = make_labels(df["close"], horizon)
         else:
             y = r
-        combined = X.join(y.rename(target)).join(r.rename("__fwd_ret")).dropna()
+        # Exclude inference-only cols (always NaN during training) from dropna so they
+        # don't wipe all rows. Only drop on columns that actually have training data.
+        drop_subset = X.columns[X.notna().any()].tolist() + [target, "__fwd_ret"]
+        combined = X.join(y.rename(target)).join(r.rename("__fwd_ret")).dropna(subset=drop_subset)
         frames.append(combined)
         print(f"  {ticker}: {len(combined)} rows")
     all_data = pd.concat(frames).sort_index()

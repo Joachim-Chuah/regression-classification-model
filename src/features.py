@@ -219,12 +219,14 @@ def compute_features(
         features["insider_net_buy_30d"] = np.nan
 
     # Options snapshot (inference-time only — NaN during training)
+    # Must use np.nan (float), not None, so these columns stay float dtype for XGBoost.
     opt = ext.get("option_snapshot") or {}
-    features["put_call_oi_ratio"] = opt.get("put_call_oi_ratio")   # None → NaN
-    features["iv_atm"]            = opt.get("iv_atm")
-    features["iv_skew"]           = opt.get("iv_skew")
+    _nf = lambda v: float(v) if v is not None else np.nan  # noqa: E731
+    features["put_call_oi_ratio"] = _nf(opt.get("put_call_oi_ratio"))
+    features["iv_atm"]            = _nf(opt.get("iv_atm"))
+    features["iv_skew"]           = _nf(opt.get("iv_skew"))
 
     # Price-target upside (inference-time only — NaN during training)
-    features["price_target_upside"] = ext.get("price_target_upside")  # None → NaN
+    features["price_target_upside"] = _nf(ext.get("price_target_upside"))
 
     return features
