@@ -1,7 +1,5 @@
 import numpy as np
 import pandas as pd
-from sklearn.isotonic import IsotonicRegression
-from sklearn.linear_model import LogisticRegression as SigmoidCalibrator
 from sklearn.model_selection import TimeSeriesSplit
 from xgboost import XGBClassifier, XGBRegressor
 
@@ -33,7 +31,7 @@ from src.splits import time_split
 # src.train.CalibratedXGB3Class) still deserialise without error.
 # ---------------------------------------------------------------------------
 
-from src.models import CalibratedXGB3Class  # noqa: F401, E402
+from src.models import CalibratedXGB3Class, fit_temperature  # noqa: F401, E402
 
 
 # ---------------------------------------------------------------------------
@@ -187,16 +185,12 @@ def train_classifier_3class(
     print(importances.sort_values(ascending=False).to_string())
     print()
 
-    # --- Isotonic calibration on val set ---
+    # --- Temperature scaling calibration on val set ---
     print(f"=== 3-Class Classifier ({model_name}) — Calibrating on val set ===")
     raw_val_proba = model.predict_proba(X_val)
-    calibrators = []
-    for k in range(3):
-        iso = IsotonicRegression(out_of_bounds="clip")
-        iso.fit(raw_val_proba[:, k], (y_val == k).astype(float))
-        calibrators.append(iso)
-    calibrated = CalibratedXGB3Class(model, calibrators)
-    print("  Done.\n")
+    T = fit_temperature(raw_val_proba, y_val.values)
+    calibrated = CalibratedXGB3Class(model, T)
+    print(f"  Temperature: {T:.4f}  ({'softening' if T > 1 else 'sharpening'} raw probabilities)\n")
 
     print(f"=== 3-Class Classifier ({model_name}) — Test ===")
     evaluate_3class(calibrated, X_test, y_test)

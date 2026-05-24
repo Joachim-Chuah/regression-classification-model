@@ -6,7 +6,7 @@ Log-loss is a proper scoring rule — it cannot be gamed by collapsing
 predictions to low-coverage high-precision subsets the way precision alone can.
 
 After the search the best params are used to retrain the full model
-(with isotonic calibration on val) and save a new versioned artifact.
+(with temperature scaling calibration on val) and save a new versioned artifact.
 
 Usage
 -----
@@ -25,7 +25,6 @@ import argparse
 import numpy as np
 import optuna
 import pandas as pd
-from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import log_loss
 from xgboost import XGBClassifier
 
@@ -37,7 +36,7 @@ from src.constants import (
     TRAIN_END, VAL_END,
 )
 from src.evaluate import evaluate_3class, threshold_analysis
-from src.models import CalibratedXGB3Class
+from src.models import CalibratedXGB3Class, fit_temperature
 from src.serialize import save_artifact
 from src.splits import time_split
 from src.train import _build
@@ -151,17 +150,14 @@ def tune(
     improvement = (default_ll - study.best_value) / default_ll * 100
     print(f"\n  Default log-loss: {default_ll:.6f}  →  improvement: {improvement:+.2f}%\n")
 
-    # Retrain with best params + isotonic calibration on val
-    print(f"  Retraining with best params + isotonic calibration...")
+    # Retrain with best params + temperature scaling calibration on val
+    print(f"  Retraining with best params + temperature scaling...")
     best_model = XGBClassifier(**{**best, **_FIXED_PARAMS})
     best_model.fit(X_train, y_train)
     raw_val = best_model.predict_proba(X_val)
-    calibrators = []
-    for k in range(3):
-        iso = IsotonicRegression(out_of_bounds="clip")
-        iso.fit(raw_val[:, k], (y_val == k).astype(float))
-        calibrators.append(iso)
-    calibrated = CalibratedXGB3Class(best_model, calibrators)
+    T = fit_temperature(raw_val, y_val.values)
+    print(f"  Temperature: {T:.4f}  ({'softening' if T > 1 else 'sharpening'} raw probabilities)")
+    calibrated = CalibratedXGB3Class(best_model, T)
 
     print(f"\n=== Test set evaluation ({model_name} v{clf_version}) ===")
     evaluate_3class(calibrated, X_test, y_test)
