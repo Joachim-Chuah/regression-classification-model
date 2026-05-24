@@ -12,6 +12,8 @@ from src.constants import (
     TICKER_SECTOR_ETF, TRAIN_END, VAL_END,
 )
 from src.data import pull, pull_earnings_dates, pull_macro
+from src.data_massive import pull_short_volume, pull_short_interest, pull_news_sentiment
+from src.data_fmp import pull_analyst_grades, pull_insider_trades
 from src.evaluate import evaluate, evaluate_3class, evaluate_regressor, threshold_analysis
 from src.features import compute_features
 from src.labels import (
@@ -57,7 +59,24 @@ def _build(
         df = pull(ticker, start=start, end=end)
         sector_etf = TICKER_SECTOR_ETF.get(ticker)
         ed = pull_earnings_dates(ticker)
-        X = compute_features(df, macro=macro, sector_etf=sector_etf, earnings_dates=ed)
+
+        external = {}
+        try:
+            external["short_volume"]   = pull_short_volume(ticker, start, end)
+            external["short_interest"] = pull_short_interest(ticker)
+            external["news_sentiment"] = pull_news_sentiment(ticker, start, end)
+        except Exception as _e:
+            print(f"  [external/massive] {ticker}: {_e}")
+        try:
+            external["analyst_grades"] = pull_analyst_grades(ticker)
+            external["insider_trades"] = pull_insider_trades(ticker)
+        except Exception as _e:
+            print(f"  [external/fmp] {ticker}: {_e}")
+
+        X = compute_features(
+            df, macro=macro, sector_etf=sector_etf,
+            earnings_dates=ed, external=external,
+        )
         r = make_returns(df["close"], horizon)
         if target == "3class":
             if label_mode == "vol_scaled":

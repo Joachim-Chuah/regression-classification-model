@@ -33,6 +33,8 @@ import pandas as pd
 from src.models import CalibratedXGB3Class  # noqa: F401
 from src.constants import DEFAULT_TICKERS, TICKER_SECTOR_ETF
 from src.data import pull, pull_earnings_dates, pull_macro
+from src.data_massive import pull_short_volume, pull_short_interest, pull_news_sentiment, pull_option_snapshot
+from src.data_fmp import pull_analyst_grades, pull_insider_trades, pull_price_target
 from src.features import compute_features
 
 # ---------------------------------------------------------------------------
@@ -302,9 +304,34 @@ def run(tickers: list[str], mode: str = "leaps", report: bool = False) -> pd.Dat
             if len(df) < 220:
                 errors.append(f"  {ticker}: only {len(df)} rows — need ≥220 for all features")
                 continue
-            sector_etf = SECTOR_MAP.get(ticker)
-            ed         = pull_earnings_dates(ticker)
-            features   = compute_features(df, macro=macro, sector_etf=sector_etf, earnings_dates=ed)
+            sector_etf    = SECTOR_MAP.get(ticker)
+            ed            = pull_earnings_dates(ticker)
+            current_price = float(df["close"].iloc[-1])
+
+            external = {}
+            try:
+                external["short_volume"]   = pull_short_volume(ticker, DATA_START, today)
+                external["short_interest"] = pull_short_interest(ticker)
+                external["news_sentiment"] = pull_news_sentiment(ticker, DATA_START, today)
+            except Exception as _e:
+                pass
+            try:
+                external["analyst_grades"] = pull_analyst_grades(ticker)
+                external["insider_trades"] = pull_insider_trades(ticker)
+                pt = pull_price_target(ticker)
+                if pt and current_price:
+                    external["price_target_upside"] = (pt - current_price) / current_price
+            except Exception as _e:
+                pass
+            try:
+                external["option_snapshot"] = pull_option_snapshot(ticker, current_price)
+            except Exception as _e:
+                pass
+
+            features = compute_features(
+                df, macro=macro, sector_etf=sector_etf,
+                earnings_dates=ed, external=external,
+            )
             latest     = features.iloc[[-1]].copy()
             for col in clf_features:
                 if col not in latest.columns:

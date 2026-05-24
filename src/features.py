@@ -40,23 +40,40 @@ def _atr_pct(df: pd.DataFrame, window: int = 14) -> pd.Series:
     return atr / close  # express as fraction of price so it's scale-independent
 
 
+def _shift_bday(series: pd.Series, n: int) -> pd.Series:
+    """Return a copy of series with its index shifted forward by n business days."""
+    return pd.Series(series.values, index=series.index + pd.tseries.offsets.BDay(n))
+
+
 def compute_features(
     df: pd.DataFrame,
     macro: pd.DataFrame | None = None,
     sector_etf: str | None = None,
     earnings_dates: pd.DatetimeIndex | None = None,
+    external: dict | None = None,
 ) -> pd.DataFrame:
     """
-    Compute features from OHLCV DataFrame, optionally joined with macro series.
+    Compute features from OHLCV DataFrame, optionally joined with macro series
+    and external signals (short interest, news sentiment, analyst grades, etc.).
 
     All features at time t use only data available at or before t.
     No in-place mutation of the input.
 
     Parameters
     ----------
-    df         : DataFrame with [open, high, low, close, volume] columns, date index.
-    macro      : Optional DataFrame from data.pull_macro() with market-wide features.
+    df       : DataFrame with [open, high, low, close, volume] columns, date index.
+    macro    : Optional DataFrame from data.pull_macro() with market-wide features.
     sector_etf : Optional sector ETF ticker (e.g. "XLK") for sector-relative strength.
+    external : Optional dict of external signals:
+               {
+                 "short_volume"        : pd.DataFrame  # col: short_volume_ratio
+                 "short_interest"      : pd.DataFrame  # cols: short_interest, days_to_cover
+                 "news_sentiment"      : pd.DataFrame  # col: news_sentiment
+                 "analyst_grades"      : pd.DataFrame  # col: grade_score
+                 "insider_trades"      : pd.DataFrame  # col: insider_score
+                 "option_snapshot"     : dict           # put_call_oi_ratio, iv_atm, iv_skew
+                 "price_target_upside" : float          # (consensus_pt - price) / price
+               }
 
     Returns
     -------
@@ -142,5 +159,72 @@ def compute_features(
         features["days_to_earnings"] = pd.Series(
             np.clip(raw_days, 0, 90), index=df.index
         )
+
+    # -----------------------------------------------------------------------
+    # External signals (short interest, news sentiment, analyst grades, etc.)
+    # NaN when data unavailable — XGBoost handles missing natively.
+    # -----------------------------------------------------------------------
+    ext = external or {}
+
+    def _dedup(s: pd.Series) -> pd.Series:
+        """Drop duplicate index entries, keeping the last value per date."""
+        return s[~s.index.duplicated(keep="last")]
+
+    # Short sale volume ratio (5-day rolling avg, 1-day publication lag)
+    sv_df = ext.get("short_volume")
+    if sv_df is not None and not sv_df.empty and "short_volume_ratio" in sv_df.columns:
+        sv = _shift_bday(_dedup(sv_df["short_volume_ratio"]), 1)
+        sv_daily = sv.reindex(df.index).ffill()
+        features["short_volume_ratio_5d"] = sv_daily.rolling(5, min_periods=1).mean()
+    else:
+        features["short_volume_ratio_5d"] = np.nan
+
+    # Days-to-cover from biweekly short interest (forward-filled)
+    si_df = ext.get("short_interest")
+    if si_df is not None and not si_df.empty and "days_to_cover" in si_df.columns:
+        features["days_to_cover"] = _dedup(si_df["days_to_cover"]).reindex(df.index).ffill()
+    else:
+        features["days_to_cover"] = np.nan
+
+    # News sentiment — rolling 3-day and 20-day averages
+    ns_df = ext.get("news_sentiment")
+    if ns_df is not None and not ns_df.empty and "news_sentiment" in ns_df.columns:
+        sent = _dedup(ns_df["news_sentiment"]).reindex(df.index)
+        features["news_sentiment_3d"]  = sent.rolling(3,  min_periods=1).mean()
+        features["news_sentiment_20d"] = sent.rolling(20, min_periods=1).mean()
+    else:
+        features["news_sentiment_3d"]  = np.nan
+        features["news_sentiment_20d"] = np.nan
+
+    # Analyst grade momentum — net score (upgrades minus downgrades) over trailing 30 days
+    # Aggregate multiple same-day events first, then shift by 1 business day.
+    ag_df = ext.get("analyst_grades")
+    if ag_df is not None and not ag_df.empty and "grade_score" in ag_df.columns:
+        grades_agg = ag_df["grade_score"].groupby(level=0).sum()
+        grades = _shift_bday(grades_agg, 1).groupby(level=0).sum()  # re-agg after shift collision
+        grades_daily = grades.reindex(df.index).fillna(0.0)
+        features["analyst_upgrade_net_30d"] = grades_daily.rolling(30, min_periods=1).sum()
+    else:
+        features["analyst_upgrade_net_30d"] = np.nan
+
+    # Insider transaction net signal — rolling 30-day sum
+    # Aggregate same-day transactions, shift by 2 business days (Form 4 filing deadline).
+    it_df = ext.get("insider_trades")
+    if it_df is not None and not it_df.empty and "insider_score" in it_df.columns:
+        insider_agg = it_df["insider_score"].groupby(level=0).sum()
+        insider = _shift_bday(insider_agg, 2).groupby(level=0).sum()  # re-agg after shift collision
+        insider_daily = insider.reindex(df.index).fillna(0.0)
+        features["insider_net_buy_30d"] = insider_daily.rolling(30, min_periods=1).sum()
+    else:
+        features["insider_net_buy_30d"] = np.nan
+
+    # Options snapshot (inference-time only — NaN during training)
+    opt = ext.get("option_snapshot") or {}
+    features["put_call_oi_ratio"] = opt.get("put_call_oi_ratio")   # None → NaN
+    features["iv_atm"]            = opt.get("iv_atm")
+    features["iv_skew"]           = opt.get("iv_skew")
+
+    # Price-target upside (inference-time only — NaN during training)
+    features["price_target_upside"] = ext.get("price_target_upside")  # None → NaN
 
     return features
