@@ -6,6 +6,8 @@ artifacts/*
 !data/processed/.gitkeep
 !artifacts/.gitkeep
 !artifacts/*.pkl
+!artifacts/reports/
+!artifacts/reports/*
 
 # Python
 __pycache__/
