@@ -16,9 +16,11 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
-      FMP_API_KEY:     ${{ secrets.FMP_API_KEY }}
-      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+      MASSIVE_API_KEY:    ${{ secrets.MASSIVE_API_KEY }}
+      FMP_API_KEY:        ${{ secrets.FMP_API_KEY }}
+      FRED_API_KEY:       ${{ secrets.FRED_API_KEY }}
+      GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
 
     steps:
       - name: Checkout repo
@@ -52,3 +54,6 @@ jobs:
           git diff --cached --quiet && echo "No report changes" || \
             git commit -m "chore: daily signal report $(date -u '+%Y-%m-%d %H:%M UTC')"
           git push
+
+      - name: Send email notification
+        run: python -m src.notify

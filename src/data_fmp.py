@@ -165,3 +165,16 @@ def pull_price_target(ticker: str) -> float | None:
     except Exception as e:
         print(f"  [fmp] price_target {ticker}: {e}")
     return None
+
+
+def pull_quote(ticker: str) -> float | None:
+    """Current live price from FMP. Not cached — always fetched live."""
+    try:
+        data = _get(f"/quote/{ticker.upper()}")
+        if isinstance(data, list) and data:
+            return float(data[0].get("price") or 0) or None
+        if isinstance(data, dict):
+            return float(data.get("price") or 0) or None
+    except Exception as e:
+        print(f"  [fmp] quote {ticker}: {e}")
+    return None

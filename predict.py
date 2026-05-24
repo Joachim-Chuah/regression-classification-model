@@ -22,6 +22,8 @@ Always check IV rank before entering options. Model does not price volatility.
 """
 
 import argparse
+import csv
+import json
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -34,7 +36,7 @@ from src.models import CalibratedXGB3Class  # noqa: F401
 from src.constants import DEFAULT_TICKERS, TICKER_SECTOR_ETF
 from src.data import pull, pull_earnings_dates, pull_macro
 from src.data_massive import pull_short_volume, pull_short_interest, pull_news_sentiment, pull_option_snapshot
-from src.data_fmp import pull_analyst_grades, pull_insider_trades, pull_price_target
+from src.data_fmp import pull_analyst_grades, pull_insider_trades, pull_price_target, pull_quote
 from src.features import compute_features
 
 # ---------------------------------------------------------------------------
@@ -100,7 +102,17 @@ SECTOR_MAP = {
 TRAINING_TICKERS = set(DEFAULT_TICKERS)
 ARTIFACTS_DIR    = Path(__file__).parent / "artifacts"
 REPORTS_DIR      = Path(__file__).parent / "artifacts" / "reports"
+SIGNALS_DIR      = Path(__file__).parent / "artifacts" / "signals"
+PNL_LOG          = Path(__file__).parent / "artifacts" / "metrics" / "pnl_log.csv"
 DATA_START       = "2015-01-01"
+
+_MODE_HORIZON = {"leaps": 20, "swing": 5, "daily": 3}
+
+_PNL_FIELDS = [
+    "call_date", "ticker", "direction", "entry_price",
+    "p_up", "p_down", "model_version", "horizon_days",
+    "exit_date", "exit_price", "return_pct", "hit",
+]
 
 MODE_CONFIG = {
     "leaps": {
@@ -142,6 +154,51 @@ MODE_CONFIG = {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _write_signals_json(
+    mode: str,
+    buys: pd.DataFrame,
+    sells: pd.DataFrame,
+) -> None:
+    calls = []
+    for _, row in buys.iterrows():
+        calls.append({
+            "ticker":    row["ticker"],
+            "direction": "up",
+            "p_up":      float(row["p_up"]),
+            "p_down":    float(row["p_down"]),
+            "exp_ret":   float(row["exp_ret"]),
+            "as_of":     row["as_of"],
+        })
+    for _, row in sells.iterrows():
+        calls.append({
+            "ticker":    row["ticker"],
+            "direction": "down",
+            "p_up":      float(row["p_up"]),
+            "p_down":    float(row["p_down"]),
+            "exp_ret":   float(row["exp_ret"]),
+            "as_of":     row["as_of"],
+        })
+    payload = {
+        "mode":         mode,
+        "horizon":      _MODE_HORIZON[mode],
+        "generated_at": datetime.now().isoformat(),
+        "calls":        calls,
+    }
+    SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
+    (SIGNALS_DIR / f"signals_{mode}.json").write_text(json.dumps(payload, indent=2))
+
+
+def _save_pnl_log(rows: list[dict]) -> None:
+    PNL_LOG.parent.mkdir(parents=True, exist_ok=True)
+    for row in rows:
+        row.setdefault("direction", "up")
+        row.setdefault("p_down", "")
+    with open(PNL_LOG, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=_PNL_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
 
 def _load_latest(pattern: str) -> tuple[dict, str]:
     candidates = sorted(ARTIFACTS_DIR.glob(pattern))
@@ -423,6 +480,11 @@ def run(tickers: list[str], mode: str = "leaps", report: bool = False) -> pd.Dat
     print(f"\n  {cfg['footer']}\n")
 
     # -----------------------------------------------------------------------
+    # Signal JSON — always written (used by notify.py and --log mode)
+    # -----------------------------------------------------------------------
+    _write_signals_json(mode, buys, sells)
+
+    # -----------------------------------------------------------------------
     # Markdown report (optional)
     # -----------------------------------------------------------------------
     if report:
@@ -433,6 +495,142 @@ def run(tickers: list[str], mode: str = "leaps", report: bool = False) -> pd.Dat
         print(f"  Report saved: {path.resolve()}\n")
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Interactive trade logger
+# ---------------------------------------------------------------------------
+
+def _log_mode() -> None:
+    """Show latest P≥0.65 calls, let user pick which to log to pnl_log.csv.
+    Auto-closes positions that have exceeded their horizon."""
+    today = date.today()
+
+    # Load existing log
+    log_rows: list[dict] = []
+    if PNL_LOG.exists():
+        with open(PNL_LOG, newline="") as f:
+            log_rows = list(csv.DictReader(f))
+
+    # Auto-close expired open positions
+    for pos in log_rows:
+        if pos.get("exit_date"):
+            continue
+        try:
+            call_dt  = date.fromisoformat(pos["call_date"])
+            horizon  = int(pos.get("horizon_days") or 20)
+            if (today - call_dt).days < horizon:
+                continue
+            price = pull_quote(pos["ticker"])
+            if not price:
+                continue
+            entry     = float(pos["entry_price"])
+            ret_pct   = round((price - entry) / entry * 100, 2)
+            direction = pos.get("direction", "up")
+            hit       = int(ret_pct > 0 if direction == "up" else ret_pct < 0)
+            pos["exit_date"]  = today.isoformat()
+            pos["exit_price"] = round(price, 2)
+            pos["return_pct"] = ret_pct
+            pos["hit"]        = hit
+            print(f"  Auto-closed {pos['ticker']}: {ret_pct:+.2f}% ({'hit' if hit else 'miss'})")
+        except Exception as e:
+            print(f"  [log] Could not close {pos['ticker']}: {e}")
+
+    # Show open positions
+    open_pos = [r for r in log_rows if not r.get("exit_date")]
+    if open_pos:
+        print(f"\n  Open positions ({len(open_pos)}):")
+        for pos in open_pos:
+            days = (today - date.fromisoformat(pos["call_date"])).days
+            print(f"    {pos['call_date']}  {pos.get('direction','up').upper():4}  "
+                  f"{pos['ticker']:<6}  entry={pos['entry_price']}  "
+                  f"horizon={pos['horizon_days']}d  held={days}d")
+
+    # Load latest calls from all signal JSON files
+    all_calls: list[dict] = []
+    for mode in ["leaps", "swing", "daily"]:
+        sig_path = SIGNALS_DIR / f"signals_{mode}.json"
+        if not sig_path.exists():
+            continue
+        try:
+            data = json.loads(sig_path.read_text())
+            for c in data.get("calls", []):
+                c["mode"]    = mode
+                c["horizon"] = data.get("horizon", _MODE_HORIZON[mode])
+                all_calls.append(c)
+        except Exception:
+            pass
+
+    print()
+    if not all_calls:
+        print(f"  No P≥{CALL_THRESHOLD:.0%} calls found. Run predict.py --report first.")
+        _save_pnl_log(log_rows)
+        return
+
+    print(f"  Latest calls (P≥{CALL_THRESHOLD:.0%}):")
+    for i, call in enumerate(all_calls):
+        p_val  = call["p_up"] if call["direction"] == "up" else call["p_down"]
+        action = "BUY " if call["direction"] == "up" else "SELL"
+        print(f"  [{i+1}] {action} {call['ticker']:<6}  P={p_val:.0%}  "
+              f"exp={call['exp_ret']:+.1%}  ({call['mode']}, as of {call['as_of']})")
+
+    print()
+    sel = input("  Enter numbers to log (e.g. 1,3) or Enter to skip: ").strip()
+    if sel:
+        try:
+            indices = [int(x.strip()) - 1 for x in sel.split(",") if x.strip()]
+        except ValueError:
+            print("  Invalid input — skipping.")
+            indices = []
+
+        for idx in indices:
+            if idx < 0 or idx >= len(all_calls):
+                print(f"  [{idx+1}] out of range — skipped")
+                continue
+            call  = all_calls[idx]
+            price = None
+            try:
+                price = pull_quote(call["ticker"])
+                if price:
+                    print(f"  Live price {call['ticker']}: ${price:.2f}")
+            except Exception as e:
+                print(f"  [log] Could not fetch price for {call['ticker']}: {e}")
+            if not price:
+                raw = input(f"  Entry price for {call['ticker']} (manual): ").strip()
+                try:
+                    price = float(raw)
+                except ValueError:
+                    print(f"  Skipping {call['ticker']} — invalid price")
+                    continue
+
+            log_rows.append({
+                "call_date":     today.isoformat(),
+                "ticker":        call["ticker"],
+                "direction":     call["direction"],
+                "entry_price":   round(price, 2),
+                "p_up":          call["p_up"],
+                "p_down":        call["p_down"],
+                "model_version": call["mode"],
+                "horizon_days":  call["horizon"],
+                "exit_date":     "",
+                "exit_price":    "",
+                "return_pct":    "",
+                "hit":           "",
+            })
+            action = "BUY " if call["direction"] == "up" else "SELL"
+            print(f"  Logged: {action} {call['ticker']} @ ${price:.2f}")
+
+    _save_pnl_log(log_rows)
+    print(f"\n  PnL log: {PNL_LOG.resolve()}")
+
+    # Print summary stats
+    closed = [r for r in log_rows if r.get("hit") != ""]
+    if closed:
+        hits    = sum(int(r["hit"]) for r in closed if r.get("hit") not in ("", None))
+        win_pct = hits / len(closed) * 100
+        rets    = [float(r["return_pct"]) for r in closed if r.get("return_pct") not in ("", None)]
+        avg_ret = sum(rets) / len(rets) if rets else 0
+        print(f"\n  Performance ({len(closed)} closed): {win_pct:.0f}% hit rate  avg_ret={avg_ret:+.2f}%")
 
 
 # ---------------------------------------------------------------------------
@@ -460,10 +658,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Write a markdown report to artifacts/reports/",
     )
+    parser.add_argument(
+        "--log",
+        action="store_true",
+        help="Interactive trade logger: pick calls to track in pnl_log.csv",
+    )
     args = parser.parse_args()
 
-    tickers = (
-        [t.upper().strip(".,; ") for t in args.tickers if t.strip(".,; ")]
-        if args.tickers else DEFAULT_WATCHLIST
-    )
-    run(tickers, mode=args.mode, report=args.report)
+    if args.log:
+        _log_mode()
+    else:
+        tickers = (
+            [t.upper().strip(".,; ") for t in args.tickers if t.strip(".,; ")]
+            if args.tickers else DEFAULT_WATCHLIST
+        )
+        run(tickers, mode=args.mode, report=args.report)
