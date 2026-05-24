@@ -1,0 +1,53 @@
+name: Weekly Retrain
+
+on:
+  schedule:
+    # Sunday 8:00 PM EDT = Monday 00:00 UTC (summer)
+    - cron: "0 0 * * 1"
+  workflow_dispatch: {}   # allow manual trigger from GitHub UI
+
+permissions:
+  contents: write
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    env:
+      MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+      FMP_API_KEY:     ${{ secrets.FMP_API_KEY }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Retrain LEAPS model (20d)
+        run: python -m src.tune --model leaps --trials 50
+
+      - name: Retrain swing model (5d)
+        run: python -m src.tune --model swing --trials 50
+
+      - name: Retrain daily model (3d)
+        run: python -m src.tune --model daily --trials 50
+
+      - name: Commit new artifacts
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add artifacts/*.pkl
+          git diff --cached --quiet && echo "No artifact changes" || \
+            git commit -m "chore: weekly retrain $(date -u '+%Y-%m-%d')"
+          git push
