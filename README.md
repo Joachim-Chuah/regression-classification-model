@@ -1,6 +1,6 @@
 # r-c-model
 
-A standalone ML project for predicting short-term stock direction and return magnitude over N trading days. Produces serialized `.pkl` artifacts designed to slot into a separate inference service (Rylo).
+ML signal scanner for short-term stock direction. Produces calibrated probabilities (P(up), P(neutral), P(down)) across three horizons using XGBoost trained on price, macro, and alternative data.
 
 ## Setup
 
@@ -8,190 +8,108 @@ A standalone ML project for predicting short-term stock direction and return mag
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-
-# macOS only — required for XGBoost
-brew install libomp
+brew install libomp   # macOS only — required for XGBoost
 ```
 
-## How to Run (Current Workflow)
-Run after 4:30pm ET on a trading day to get signals based on the latest settled close.
+### API keys
 
-Run these from the `regression-classification-model` directory.
+Create a `.env` file in the project root:
 
-### 1) Train both models and save artifacts
+```
+MASSIVE_API_KEY=your_key   # short volume, short interest, news sentiment, options
+FMP_API_KEY=your_key       # analyst grades, insider trades, price targets
+FRED_API_KEY=your_key      # macro: fed funds, CPI, unemployment, NFCI
+```
+
+All three are optional — missing keys mean those features are NaN (XGBoost handles this natively).
+
+## Running
 
 ```bash
-python -m src.train
-```
-
-This trains:
-- 3-class classifier (`xgb_clf3`, isotonic-calibrated)
-- regressor (`xgb_reg`)
-
-Artifacts are saved under `artifacts/`.
-
-Optional: train with volatility-scaled labels for the classifier:
-
-```python
-from src.train import train_classifier_3class
-
-train_classifier_3class(
-    label_mode="vol_scaled",
-    vol_k=1.0,
-    vol_min_threshold=0.005,
-)
-```
-
-### 2) Run walk-forward evaluation and export metrics CSV
-
-```bash
-python -m src.walk_forward
-```
-
-This prints per-year fold metrics and writes:
-- `artifacts/metrics/walk_forward_summary.csv`
-
-Optional: run walk-forward with volatility-scaled labels:
-
-```python
-from src.walk_forward import walk_forward_cv
-
-walk_forward_cv(
-    label_mode="vol_scaled",
-    vol_k=1.0,
-    vol_min_threshold=0.005,
-    export_csv_path="artifacts/metrics/walk_forward_vol_scaled.csv",
-)
-```
-
-Optional: run a volatility-scaled label sweep (`k=0.75,1.0,1.25` + fixed baseline):
-
-```bash
-python -m src.experiments
-```
-
-Writes one CSV per run under:
-- `artifacts/metrics/experiments/`
-
-### 3) Run the daily scanner
-
-```bash
-# default watchlist, LEAPS mode
+# LEAPS mode (20-day horizon) — default
 python predict.py
 
-# swing mode
+# Swing mode (5-day)
 python predict.py --mode swing
 
-# custom tickers
+# Daily mode (3-day)
+python predict.py --mode daily
+
+# Write markdown report to artifacts/reports/
+python predict.py --report
+
+# Custom tickers
 python predict.py AAPL NVDA MSFT
 ```
 
-### 4) Run tests
+Run after 4:30pm ET on a trading day to get signals based on the day's settled close.
+
+## Retraining
 
 ```bash
-# full suite (includes integration tests that may hit live network data)
-pytest tests/ -v
+# Retune LEAPS model (50 Optuna trials)
+python -m src.tune
 
-# stable local quick check (no integration tests)
-pytest tests/ -m "not integration" -v
+# Retune swing or daily
+python -m src.tune --model swing
+python -m src.tune --model daily
 ```
 
-### 5) Experiment sweep (recommended tuning loop)
+Retraining pulls fresh data, re-searches hyperparameters, and saves a new versioned `.pkl` to `artifacts/`.
 
-```bash
-python -m src.experiments
-```
+## Automation (GitHub Actions)
 
-Default sweep:
-- fixed-threshold baseline
-- volatility-scaled labels with `k=0.75, 1.0, 1.25`
+Two workflows run on schedule:
 
-CSV outputs:
-- `artifacts/metrics/experiments/walk_forward_fixed.csv`
-- `artifacts/metrics/experiments/walk_forward_vol_scaled_k0.75.csv`
-- `artifacts/metrics/experiments/walk_forward_vol_scaled_k1.00.csv`
-- `artifacts/metrics/experiments/walk_forward_vol_scaled_k1.25.csv`
-
----
-
-## Metric Priorities (Important)
-
-Brier skill is useful, but for this strategy do not optimize on Brier alone.
-Primary promotion metrics should be:
-
-- `p60_precision`, `p70_precision`
-- `top10_precision`, `top20_precision`
-- `p60_mean_return`, `top10_mean_return`
-
-Use Brier as a calibration health check, not the only gate.
-
-**Threshold guide** (backtested precision on 2024 test set):
-
-| Signal | P(up) | Historical precision |
+| Workflow | Schedule | What it does |
 |---|---|---|
-| ★★ STRONG UP | ≥ 0.70 | 83% |
-| ★ HIGH UP | ≥ 0.60 | 76% — recommended entry bar |
-| up | ≥ 0.50 | 57% — directional lean only |
+| `predict.yml` | 8am + 8pm EDT daily | Runs all three modes, commits reports |
+| `retrain.yml` | 8pm EDT Sunday | Re-tunes all three models, commits new `.pkl` files |
 
-Always check IV rank on your broker before entering options. The model does not price volatility.
+Both can also be triggered manually from the Actions tab. Requires `MASSIVE_API_KEY`, `FMP_API_KEY`, and `FRED_API_KEY` set as GitHub repository secrets.
 
-## Train the models
+## Features
 
-```bash
-# Train 3-class classifier + regressor on 13 tickers, save artifacts to artifacts/
-python -m src.train
-```
-
-Training covers 2015–2023 (train + val) and evaluates on 2024 (test). You do not need to retrain before running `predict.py` — the saved artifacts are loaded directly.
-
-**Retrain when:**
-- You want to include a new year of market data (quarterly refresh)
-- You change `DEFAULT_HORIZON` in `src/constants.py` (e.g. to 5 days for swing trading)
-- You add new features to `src/features.py`
-
-## Walk-forward cross-validation
-
-Validates the model across 5 distinct market regimes (2020–2024) rather than a single test year.
-Use the workflow above for standard and vol-scaled runs.
+| Group | Features |
+|---|---|
+| Momentum | 5d, 10d, 21d price return; vs 200-day MA |
+| Technical | RSI-14, MACD line + histogram, Bollinger position, ATR% |
+| Volatility | 21-day realised vol, 14-day ATR |
+| Volume | 21-day volume z-score |
+| Macro | VIX level + z-score + 5d change; SPY 20d/52w return + 52w drawdown; 10Y yield z-score + 20d change; yield curve z-score; IWM vs SPY; HYG/LQD ratio; fed funds, CPI, unemployment, NFCI |
+| Relative strength | Stock vs SPY (20d); stock vs sector ETF (20d) |
+| Short data | Short volume ratio (5d avg); days-to-cover |
+| Sentiment | News sentiment (3d + 20d avg); analyst upgrade net score (30d); insider net buy score (30d) |
+| Options | Put/call OI ratio; ATM IV; IV skew (inference-time only) |
+| Analyst | Price target upside (inference-time only) |
+| Event | Days to next earnings (capped at 90) |
 
 ## Tests
 
 ```bash
-# Fast unit tests — no network required (~1 second)
-python -m pytest tests/ -m "not integration" -q
-
-# Full suite including network/data freshness checks
-# Run after 4:30pm ET to verify today's EOD data is live
-python -m pytest tests/test_data.py -m integration -v
-
-# All tests
-python -m pytest tests/ -v
+pytest tests/ -m "not integration" -v   # fast, no network
+pytest tests/ -v                         # full suite
 ```
 
 ## Data
 
-`data/` is gitignored. Raw OHLCV is pulled from yfinance and cached as parquet on first run. Historical data (any date before today) is cached permanently. Today's data is never cached — it is always re-fetched so you always get the latest close.
+`data/` is gitignored. OHLCV is pulled from yfinance and cached as daily parquet files. Alternative data (short volume, sentiment, grades, insider trades) is cached once per day per ticker.
 
-To re-pull historical data for a ticker, delete the relevant file in `data/raw/` and rerun.
+To re-pull: delete the relevant file in `data/raw/` and rerun.
 
 ## Artifact format
 
-Saved to `artifacts/v{version}_{ticker}_{model_name}.pkl` via joblib:
+Saved to `artifacts/v{version}_multi_{model_name}.pkl` via joblib:
 
 ```python
 {
-    "model":         calibrated_model,   # exposes predict_proba(X) and predict(X)
-    "feature_names": [...],              # must match compute_features() output
-    "version":       "1.1.0",
-    "ticker":        "multi",
-    "model_name":    "xgb_clf3",
-    "trained_at":    "2025-...",
+    "model":          calibrated_model,  # predict_proba(X) → (N, 3)
+    "feature_names":  [...],             # must match compute_features() output
+    "version":        "1.4.0",
+    "trained_at":     "2025-...",
 }
 ```
 
-The classifier (`xgb_clf3`) returns `predict_proba(X)` with shape `(N, 3)`:
-- `[:, 0]` → P(down) — 20-day return < −2%
-- `[:, 1]` → P(neutral) — 20-day return within ±2%
-- `[:, 2]` → P(up) — 20-day return > +2%
+`predict_proba` columns: `[P(down), P(neutral), P(up)]`
 
-The regressor (`xgb_reg`) returns the expected 20-day forward return as a signed float.
+Signal threshold: **P(up) ≥ 0.65** → ~70% historical precision (2024 backtest). Always check IV rank before entering options — the model does not price volatility.
